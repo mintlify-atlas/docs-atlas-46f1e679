@@ -1,0 +1,129 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Plano",
+  "projectDescription": "AI-native proxy server and data plane that offloads plumbing work for agentic applications, providing orchestration, routing, observability, and guardrails.",
+  "theme": "aspen",
+  "primaryColor": "#969FF4",
+  "lightColor": "#B8C0F9",
+  "darkColor": "#7481E8",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "core-concepts"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/agent-orchestration",
+              "features/llm-routing",
+              "features/observability",
+              "features/filter-chains",
+              "features/state-management"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/setup-deployment",
+              "guides/building-agents",
+              "guides/llm-gateway",
+              "guides/prompt-targets",
+              "guides/guardrails",
+              "guides/tracing-monitoring"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/listeners",
+              "configuration/agents",
+              "configuration/model-providers",
+              "configuration/filters",
+              "configuration/advanced"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/overview",
+              "cli/up",
+              "cli/down",
+              "cli/build",
+              "cli/logs",
+              "cli/trace",
+              "cli/init"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Architecture",
+        "groups": [
+          {
+            "group": "Technical Overview",
+            "pages": [
+              "architecture/system-design",
+              "architecture/request-lifecycle",
+              "architecture/components",
+              "architecture/envoy-integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Resources",
+        "groups": [
+          {
+            "group": "Additional Resources",
+            "pages": [
+              "resources/examples",
+              "resources/troubleshooting",
+              "resources/faq",
+              "resources/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Low-latency agent orchestration with intelligent routing",
+    "Model-agnostic LLM gateway supporting multiple providers",
+    "Zero-code observability with OTEL traces and agentic signals",
+    "Filter chains for guardrails, moderation, and memory hooks",
+    "Prompt targets for deterministic API calls from natural language",
+    "Built on Envoy proxy for production-grade reliability",
+    "State management for conversations and application context",
+    "Python CLI for easy lifecycle management"
+  ],
+  "publicApiSurface": [
+    "planoai up - Start Plano with configuration",
+    "planoai down - Stop Plano",
+    "planoai build - Build from source",
+    "planoai logs - Stream access and debug logs",
+    "planoai trace - Collect and analyze OTEL traces",
+    "planoai init - Initialize new project",
+    "planoai cli_agent - Start CLI agent",
+    "planoai generate_prompt_targets - Generate prompt targets from Python methods",
+    "/v1/chat/completions - OpenAI-compatible chat endpoint",
+    "YAML Configuration - listeners, agents, model_providers, filters, prompt_targets, tracing",
+    "Filter Chain API - HTTP and MCP filters",
+    "Model Aliases - Semantic model naming",
+    "Routing Preferences - Preference-based model selection",
+    "State Storage - Memory and PostgreSQL backends"
+  ]
+}
