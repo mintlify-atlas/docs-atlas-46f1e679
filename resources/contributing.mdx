@@ -1,0 +1,513 @@
+---
+title: "Contributing"
+description: "How to contribute to Plano - from bug fixes to new features"
+---
+
+We welcome contributions to Plano! Whether you're fixing bugs, adding features, improving documentation, or creating demos, your help is appreciated.
+
+<Card
+  title="View our Roadmap"
+  icon="map"
+  href="https://github.com/orgs/katanemo/projects/1"
+>
+  See what we're working on and share your feedback
+</Card>
+
+## Getting Started
+
+<Steps>
+  <Step title="Fork the Repository">
+    Create your own copy of Plano:
+
+    1. Navigate to the [Plano GitHub repository](https://github.com/katanemo/plano)
+    2. Click **Fork** in the upper right corner
+    3. This creates a copy under your GitHub account
+  </Step>
+
+  <Step title="Clone Your Fork">
+    Clone the repository to your local machine:
+
+    ```bash
+    git clone git@github.com:<your-username>/plano.git
+    cd plano
+    ```
+
+    Replace `<your-username>` with your GitHub username.
+  </Step>
+
+  <Step title="Add Upstream Remote">
+    Add the original repository as upstream to sync changes:
+
+    ```bash
+    git remote add upstream git@github.com:katanemo/plano.git
+    ```
+
+    To sync your fork with the latest changes:
+
+    ```bash
+    git fetch upstream
+    git checkout main
+    git merge upstream/main
+    ```
+  </Step>
+</Steps>
+
+## Development Setup
+
+### Install Prerequisites
+
+<Tabs>
+  <Tab title="Python (CLI)">
+    **Install uv** (Python package manager for the planoai CLI):
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+    **Setup the CLI:**
+
+    ```bash
+    cd cli
+    uv sync
+    ```
+
+    This creates a virtual environment in `.venv` and installs all dependencies.
+
+    **Use the CLI:**
+
+    ```bash
+    # From anywhere:
+    planoai --help
+    
+    # Or from cli/ directory:
+    uv run planoai --help
+    ```
+  </Tab>
+
+  <Tab title="Rust (Core)">
+    **Install Rust toolchain:**
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+    **Add WASM target:**
+
+    ```bash
+    rustup target add wasm32-wasip1
+    ```
+
+    **Build WASM plugins:**
+
+    ```bash
+    cd crates
+    cargo build --release --target=wasm32-wasip1 -p llm_gateway -p prompt_gateway
+    ```
+
+    **Build brightstaff binary:**
+
+    ```bash
+    cd crates
+    cargo build --release -p brightstaff
+    ```
+  </Tab>
+
+  <Tab title="Pre-commit Hooks">
+    **Install pre-commit:**
+
+    ```bash
+    pip install pre-commit
+    pre-commit install
+    ```
+
+    Pre-commit hooks automatically run before each commit:
+    - YAML validation
+    - Rust formatting (`cargo fmt`)
+    - Rust linting (`cargo clippy`)
+    - Python formatting (`black`)
+    - Rust unit tests
+
+    **Run manually:**
+
+    ```bash
+    pre-commit run --all-files
+    ```
+  </Tab>
+</Tabs>
+
+## Making Changes
+
+<Steps>
+  <Step title="Create a Branch">
+    Use a descriptive name for your branch:
+
+    ```bash
+    git checkout -b <your-branch-name>
+    ```
+
+    **Good branch names:**
+    - `fix-agent-routing-bug`
+    - `add-gemini-provider`
+    - `docs-filter-chains`
+    - `feat-preference-routing`
+  </Step>
+
+  <Step title="Make Your Changes">
+    Edit the relevant files. If adding features or fixing bugs, include tests where applicable.
+
+    **Key directories:**
+    - `crates/` - Rust code (WASM filters, brightstaff)
+    - `cli/` - Python CLI
+    - `demos/` - Example applications
+    - `config/` - Config schema and templates
+    - `tests/e2e/` - End-to-end tests
+  </Step>
+
+  <Step title="Test Your Changes">
+    Run relevant tests before committing:
+
+    <Tabs>
+      <Tab title="Rust Tests">
+        ```bash
+        cd crates
+        cargo test
+        ```
+
+        For library tests only:
+        ```bash
+        cargo test --lib
+        ```
+
+        Format and lint:
+        ```bash
+        cargo fmt --all
+        cargo clippy --locked --all-targets --all-features -- -D warnings
+        ```
+      </Tab>
+
+      <Tab title="Python Tests">
+        ```bash
+        cd cli
+        uv run pytest
+        ```
+
+        With verbose output:
+        ```bash
+        uv run pytest -v
+        ```
+
+        Format:
+        ```bash
+        black .
+        ```
+      </Tab>
+
+      <Tab title="Pre-commit">
+        Run all checks:
+        ```bash
+        pre-commit run --all-files
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Submitting Changes
+
+<Steps>
+  <Step title="Commit Your Changes">
+    Write clear, concise commit messages:
+
+    ```bash
+    git add .
+    git commit -m "fix: resolve agent routing for Docker networks"
+    ```
+
+    **Commit message format:**
+    - `feat:` - New feature
+    - `fix:` - Bug fix
+    - `docs:` - Documentation changes
+    - `test:` - Adding or updating tests
+    - `refactor:` - Code refactoring
+    - `chore:` - Maintenance tasks
+  </Step>
+
+  <Step title="Push to Your Fork">
+    ```bash
+    git push origin <your-branch-name>
+    ```
+  </Step>
+
+  <Step title="Create a Pull Request">
+    1. Go to the [Plano repository](https://github.com/katanemo/plano)
+    2. Click **Compare & pull request**
+    3. Fill out the PR template:
+       - Describe what changed and why
+       - Link related issues
+       - Add screenshots for UI changes
+       - List breaking changes (if any)
+    4. Submit the PR
+  </Step>
+</Steps>
+
+## Contribution Guidelines
+
+<AccordionGroup>
+  <Accordion title="Code Style" icon="code">
+    **Rust (crates/)**
+    - Edition 2021
+    - Format with `cargo fmt`
+    - Lint with `cargo clippy -D warnings`
+    - Follow existing patterns in the codebase
+
+    **Python (cli/)**
+    - Format with Black
+    - Type hints where helpful
+    - Docstrings for public functions
+
+    **YAML (configs)**
+    - 2-space indentation
+    - Validate against schema
+    - Include comments for complex sections
+  </Accordion>
+
+  <Accordion title="Testing" icon="flask">
+    **All contributions should include tests:**
+
+    **Rust unit tests:**
+    ```rust
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_router_logic() {
+            // Test code
+        }
+    }
+    ```
+
+    **Python tests:**
+    ```python
+    def test_config_validation():
+        # Test code
+        assert result.is_valid()
+    ```
+
+    **E2E tests** for new features (tests/e2e/):
+    - Test end-to-end workflows
+    - Require Docker and API keys
+    - Document test setup in README
+  </Accordion>
+
+  <Accordion title="Documentation" icon="book">
+    **Update docs for user-facing changes:**
+
+    - **Config changes**: Update `config/plano_config_schema.yaml`
+    - **New features**: Add guide to `docs/guides/`
+    - **API changes**: Update relevant documentation
+    - **Demos**: Include README with setup instructions
+
+    **Documentation style:**
+    - Use clear, concise language
+    - Include code examples
+    - Add screenshots for UI features
+    - Keep examples up-to-date
+  </Accordion>
+
+  <Accordion title="Breaking Changes" icon="triangle-exclamation">
+    **If your change breaks existing functionality:**
+
+    1. Mark as breaking in PR title: `[BREAKING]`
+    2. Document migration path in PR description
+    3. Update CHANGELOG (if exists)
+    4. Provide upgrade guide
+
+    **Examples:**
+    - Config schema changes
+    - API signature changes
+    - Removed features
+  </Accordion>
+</AccordionGroup>
+
+## Specialized Contributions
+
+<Tabs>
+  <Tab title="Adding LLM Providers">
+    To add support for a new LLM provider:
+
+    1. **Add provider to hermesllm** (`crates/hermesllm/`):
+       ```rust
+       pub enum ProviderId {
+           OpenAI,
+           Anthropic,
+           NewProvider,  // Add here
+       }
+       ```
+
+    2. **Implement request/response translation:**
+       - Add conversion functions
+       - Handle provider-specific quirks
+       - Support streaming if available
+
+    3. **Add tests:**
+       ```bash
+       cd crates/hermesllm
+       cargo test
+       ```
+
+    4. **Create demo:**
+       - Add example in `demos/integrations/`
+       - Include setup instructions
+       - Show provider-specific features
+  </Tab>
+
+  <Tab title="Creating Demos">
+    **Good demos include:**
+
+    1. **README.md** with:
+       - Overview of what the demo shows
+       - Prerequisites
+       - Setup instructions
+       - Example queries/interactions
+       - Architecture diagram (if complex)
+
+    2. **config.yaml** - Plano configuration
+
+    3. **docker-compose.yml** - All services
+
+    4. **Agent code** - Well-commented implementation
+
+    5. **Sample queries** - Example curl commands or UI interactions
+
+    **Place demos in:**
+    - `demos/getting_started/` - Beginner-friendly
+    - `demos/agent_orchestration/` - Multi-agent systems
+    - `demos/llm_routing/` - Routing strategies
+    - `demos/filter_chains/` - Filters and guardrails
+    - `demos/integrations/` - Third-party services
+    - `demos/advanced/` - Complex use cases
+  </Tab>
+
+  <Tab title="Improving Documentation">
+    **Documentation lives in two places:**
+
+    **1. Source repo docs (`docs/source/`)**
+    - Main Sphinx documentation
+    - Detailed guides and concepts
+
+    **2. Demo READMEs**
+    - Quick start guides
+    - Example-specific instructions
+
+    **How to contribute:**
+
+    1. Fix typos or clarify confusing sections
+    2. Add missing examples
+    3. Update outdated screenshots
+    4. Improve navigation structure
+    5. Add troubleshooting tips
+
+    **Preview docs locally:**
+    ```bash
+    cd docs
+    make html
+    open build/html/index.html
+    ```
+  </Tab>
+</Tabs>
+
+## Release Process
+
+<Warning>
+  **For maintainers only** - contributors don't need to worry about versioning.
+</Warning>
+
+When preparing a release (e.g., `0.4.6` → `0.4.7`), update version strings in:
+
+**CI/Build:**
+- `.github/workflows/ci.yml`
+- `build_filter_image.sh`
+- `config/validate_plano_config.sh`
+
+**CLI:**
+- `cli/planoai/__init__.py`
+- `cli/planoai/consts.py`
+- `cli/pyproject.toml`
+
+**Docs:**
+- `docs/source/conf.py`
+- `docs/source/get_started/quickstart.rst`
+- `docs/source/resources/deployment.rst`
+
+**Other:**
+- `apps/www/src/components/Hero.tsx`
+- Demo READMEs with version-specific output
+
+**Do NOT change:**
+- Version references in `.lock` files
+- Dependency versions (e.g., `colorama`, `http-body`)
+
+Commit format: `release X.Y.Z`
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card
+    title="Discord Community"
+    icon="discord"
+    href="https://discord.gg/pGZf2gcwEc"
+  >
+    Ask questions and get help from maintainers
+  </Card>
+  <Card
+    title="GitHub Discussions"
+    icon="github"
+    href="https://github.com/katanemo/plano/discussions"
+  >
+    Discuss ideas and share feedback
+  </Card>
+  <Card
+    title="Issue Tracker"
+    icon="circle-exclamation"
+    href="https://github.com/katanemo/plano/issues"
+  >
+    Report bugs or request features
+  </Card>
+  <Card
+    title="Roadmap"
+    icon="map"
+    href="https://github.com/orgs/katanemo/projects/1"
+  >
+    See what we're working on
+  </Card>
+</CardGroup>
+
+## Code of Conduct
+
+**We're committed to providing a welcoming and inclusive environment:**
+
+- Be respectful and constructive
+- Welcome newcomers and help them get started
+- Give credit where it's due
+- Focus on what's best for the community
+- Show empathy towards others
+
+**Unacceptable behavior:**
+- Harassment, discrimination, or abuse
+- Trolling or insulting comments
+- Publishing others' private information
+- Other conduct that could be considered inappropriate
+
+<Info>
+  By contributing, you agree that your contributions will be licensed under the same license as the project.
+</Info>
+
+## Recognition
+
+Contributors are recognized in:
+- GitHub contributor graph
+- Release notes (for significant contributions)
+- Community showcases
+
+**Thank you for contributing to Plano!** Every contribution, no matter how small, helps make the project better for everyone.

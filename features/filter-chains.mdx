@@ -1,0 +1,521 @@
+---
+title: Filter Chains
+description: Build reusable workflow steps for guardrails, context enrichment, and request processing in the dataplane
+---
+
+Filter chains are Plano's way of capturing **reusable workflow steps** in the dataplane, without duplicating logic across application code. A filter chain is an ordered list of mutations that a request flows through before reaching its final destination—such as an agent, an LLM, or a tool backend.
+
+## What Are Filter Chains?
+
+Each filter is a network-addressable service that can:
+
+<Steps>
+  <Step title="Inspect">
+    Inspect the incoming prompt, metadata, and conversation state
+  </Step>
+  <Step title="Mutate">
+    Mutate or enrich the request (e.g., rewrite queries, build context, add metadata)
+  </Step>
+  <Step title="Short-circuit">
+    Short-circuit the flow and return a response early (e.g., block requests on compliance failures)
+  </Step>
+  <Step title="Observe">
+    Emit structured logs and traces for debugging and continuous improvement
+  </Step>
+</Steps>
+
+<Info>
+Filter chains provide a lightweight programming model over HTTP for building reusable steps in your agent architectures.
+</Info>
+
+## Why Filter Chains?
+
+Without a dataplane programming model, teams tend to spread logic like query rewriting, compliance checks, context building, and routing decisions across many agents and frameworks. This quickly becomes hard to reason about and even harder to evolve.
+
+<CardGroup cols={2}>
+  <Card title="Without Filter Chains" icon="xmark">
+    Logic scattered across agents and frameworks. Hard to maintain, test, and evolve. Duplication everywhere.
+  </Card>
+  <Card title="With Filter Chains" icon="check">
+    Define once, attach to many agents and prompt targets. Add, remove, or reorder without changing application code.
+  </Card>
+</CardGroup>
+
+## Typical Use Cases
+
+Filter chains show up most often in these patterns:
+
+<Tabs>
+  <Tab title="Guardrails & Compliance">
+    Enforce content policies, strip or mask sensitive data, and block unsafe or off-topic requests before they reach an agent.
+
+    **Common patterns:**
+    - PII detection and masking
+    - Content moderation and safety checks
+    - Rate limiting and quota enforcement
+    - Input validation and sanitization
+    - Compliance policy enforcement
+
+    **Example filter:**
+    ```yaml
+    filters:
+      - id: input_guards
+        url: http://host.docker.internal:10500
+        type: mcp
+    ```
+  </Tab>
+  <Tab title="Query Rewriting & RAG">
+    Rewrite user queries for retrieval, normalize entities, and assemble RAG context envelopes with relevant memory.
+
+    **Common patterns:**
+    - Query expansion and reformulation
+    - Entity extraction and normalization
+    - Context retrieval from vector databases
+    - Conversation history injection
+    - User profile and preference enrichment
+
+    **Example filters:**
+    ```yaml
+    filters:
+      - id: query_rewriter
+        url: http://host.docker.internal:10501
+      - id: context_builder
+        url: http://host.docker.internal:10502
+    ```
+  </Tab>
+  <Tab title="Cross-cutting Observability">
+    Inject correlation IDs, sample traces, or log enriched request metadata at consistent points in the request path.
+
+    **Common patterns:**
+    - Request ID generation and propagation
+    - User context extraction
+    - Custom span attributes
+    - Metric collection
+    - Audit logging
+
+    **Example:**
+    ```yaml
+    tracing:
+      random_sampling: 100
+      span_attributes:
+        header_prefixes:
+          - x-request-
+          - x-user-
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration Example
+
+Here's a real configuration from the MCP filter demo showing a RAG agent with a filter chain:
+
+```yaml config.yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://host.docker.internal:10505
+
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    # type: mcp (default)
+    # transport: streamable-http (default)
+    # tool: input_guards (default - same as filter id)
+  
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    # type: mcp (default)
+    # transport: streamable-http (default)
+    # tool: query_rewriter (default - same as filter id)
+  
+  - id: context_builder
+    url: http://host.docker.internal:10502
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+
+model_aliases:
+  fast-llm:
+    target: gpt-4o-mini
+  smart-llm:
+    target: gpt-4o
+
+listeners:
+  - type: agent
+    name: agent_1
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: virtual assistant for retrieval augmented generation tasks
+        filter_chain:
+          - input_guards
+          - query_rewriter
+          - context_builder
+
+tracing:
+  random_sampling: 100
+```
+
+**In this setup:**
+- The `filters` section defines reusable filters, each running as its own HTTP/MCP service
+- The `listeners` section wires the `rag_agent` behind an `agent` listener and attaches a `filter_chain`
+- When a request arrives at `agent_1`, Plano executes filters in order: `input_guards` → `query_rewriter` → `context_builder` → `rag_agent`
+
+## Filter Programming Model
+
+Filters are implemented as simple RESTful endpoints reachable via HTTP or using the Model Context Protocol (MCP).
+
+<Tabs>
+  <Tab title="MCP Filters">
+    Use the [Model Context Protocol](https://modelcontextprotocol.io/) for standardized filter implementation.
+
+    ```yaml
+    filters:
+      - id: query_rewriter
+        url: http://host.docker.internal:10501
+        type: mcp  # default
+        transport: streamable-http  # default
+        tool: query_rewriter  # default - same as filter id
+    ```
+
+    **Configuration fields:**
+    - `type`: Set to `mcp` (default)
+    - `transport`: How Plano talks to the filter (default: `streamable-http`)
+    - `tool`: MCP tool name to invoke (default: matches filter `id`)
+
+    <Tip>
+    In most cases, you only need to specify `id` and `url`. Plano's defaults handle the rest.
+    </Tip>
+  </Tab>
+  <Tab title="HTTP Filters">
+    Implement filters as plain HTTP services for maximum flexibility.
+
+    ```yaml
+    filters:
+      - id: input_guards
+        url: http://rag-agents:10500
+        type: http
+      
+      - id: query_rewriter
+        url: http://rag-agents:10501
+        type: http
+      
+      - id: context_builder
+        url: http://rag-agents:10502
+        type: http
+    ```
+
+    **HTTP Response Semantics:**
+    - **200 (Success)**: Filter processed successfully. Mutations are passed downstream.
+    - **4xx (User Error)**: Request violates filter rules (e.g., content moderation). Request terminated, error returned to caller.
+    - **5xx (Fatal Error)**: Unexpected failure in filter. Error surfaced to caller and recorded in logs/traces.
+
+    <Info>
+    4xx responses represent expected policy enforcement (like blocking unsafe content), while 5xx indicates critical failures requiring investigation.
+    </Info>
+  </Tab>
+</Tabs>
+
+## Filter Chain Execution
+
+When a request arrives, Plano executes filters in the order specified:
+
+<Steps>
+  <Step title="Request Arrives">
+    Client sends request to Plano listener (e.g., port 8001)
+  </Step>
+  <Step title="Execute Filter Chain">
+    Plano executes each filter in order:
+    1. `input_guards` - validates and sanitizes input
+    2. `query_rewriter` - rewrites query for better retrieval
+    3. `context_builder` - adds RAG context from vector DB
+  </Step>
+  <Step title="Route to Agent">
+    Enriched request is forwarded to the agent (e.g., `rag_agent`)
+  </Step>
+  <Step title="Return Response">
+    Agent response flows back through Plano to the client
+  </Step>
+</Steps>
+
+<Warning>
+If any filter fails or decides to terminate the request early (e.g., policy violation), Plano surfaces that outcome back to the caller and records it in logs and traces.
+</Warning>
+
+## Real-World Examples
+
+<CodeGroup>
+```yaml Guardrails Pipeline
+version: v0.3.0
+
+agents:
+  - id: chat_agent
+    url: http://chat-service:8080
+
+filters:
+  # Step 1: PII detection and masking
+  - id: pii_filter
+    url: http://guardrails:10500
+    type: http
+  
+  # Step 2: Content moderation
+  - id: content_moderation
+    url: http://guardrails:10501
+    type: http
+  
+  # Step 3: Rate limiting
+  - id: rate_limiter
+    url: http://guardrails:10502
+    type: http
+
+listeners:
+  - type: agent
+    name: chat_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: chat_agent
+        description: General purpose chat agent
+        filter_chain:
+          - pii_filter
+          - content_moderation
+          - rate_limiter
+```
+
+```yaml RAG Pipeline
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://rag-service:8080
+
+filters:
+  # Step 1: Validate and guard inputs
+  - id: input_guards
+    url: http://filters:10500
+    type: mcp
+  
+  # Step 2: Rewrite query for better retrieval
+  - id: query_rewriter
+    url: http://filters:10501
+    type: mcp
+  
+  # Step 3: Retrieve and build context
+  - id: context_builder
+    url: http://filters:10502
+    type: mcp
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: rag_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: RAG assistant with context enrichment
+        filter_chain:
+          - input_guards
+          - query_rewriter
+          - context_builder
+```
+
+```yaml Multi-Agent with Filters
+version: v0.3.0
+
+agents:
+  - id: research_agent
+    url: http://research:8080
+  - id: writing_agent
+    url: http://writing:8080
+
+filters:
+  # Shared filters used by multiple agents
+  - id: input_validation
+    url: http://filters:10500
+  - id: context_enrichment
+    url: http://filters:10501
+  
+  # Agent-specific filter
+  - id: citation_validator
+    url: http://filters:10502
+
+listeners:
+  - type: agent
+    name: content_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: research_agent
+        description: Research and fact-finding agent
+        filter_chain:
+          - input_validation
+          - context_enrichment
+          - citation_validator
+      
+      - id: writing_agent
+        description: Content writing and editing agent
+        filter_chain:
+          - input_validation
+          - context_enrichment
+```
+</CodeGroup>
+
+## Key Benefits
+
+<CardGroup cols={2}>
+  <Card title="Reusability" icon="recycle">
+    Define filters once, attach them to many agents and prompt targets. No code duplication.
+  </Card>
+  <Card title="Composability" icon="layer-group">
+    Build complex workflows by chaining simple, focused filters together.
+  </Card>
+  <Card title="Flexibility" icon="wrench">
+    Add, remove, or reorder filters without changing application code. Deploy changes instantly.
+  </Card>
+  <Card title="Observability" icon="eye">
+    Each filter execution is traced and logged, making it easy to debug issues.
+  </Card>
+  <Card title="Language Agnostic" icon="code">
+    Write filters in any language that can serve HTTP. Python, Go, Node.js, Rust—anything works.
+  </Card>
+  <Card title="Testing" icon="flask">
+    Test filters independently as HTTP services. Unit test business logic separately from integration.
+  </Card>
+</CardGroup>
+
+## Filter Development
+
+<Tabs>
+  <Tab title="HTTP Filter Example">
+    A simple HTTP filter that validates and enriches requests:
+
+    ```python
+    from flask import Flask, request, jsonify
+
+    app = Flask(__name__)
+
+    @app.route('/validate', methods=['POST'])
+    def validate():
+        data = request.json
+        messages = data.get('messages', [])
+        
+        # Validate input
+        if not messages:
+            return jsonify({'error': 'No messages provided'}), 400
+        
+        # Check for unsafe content
+        last_message = messages[-1]['content']
+        if contains_unsafe_content(last_message):
+            return jsonify({'error': 'Unsafe content detected'}), 400
+        
+        # Enrich with metadata
+        data['metadata'] = {
+            'validated_at': time.time(),
+            'filter_id': 'input_validation',
+            'version': '1.0'
+        }
+        
+        # Return 200 with enriched data
+        return jsonify(data), 200
+
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0', port=10500)
+    ```
+  </Tab>
+  <Tab title="MCP Filter Example">
+    An MCP filter that rewrites queries:
+
+    ```python
+    from mcp.server import Server
+    from mcp.types import Tool, TextContent
+
+    server = Server("query_rewriter")
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        return [
+            Tool(
+                name="query_rewriter",
+                description="Rewrites user queries for better retrieval",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "context": {"type": "object"}
+                    }
+                }
+            )
+        ]
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict):
+        if name == "query_rewriter":
+            query = arguments.get("query", "")
+            
+            # Rewrite query using LLM or rules
+            rewritten = await rewrite_query(query)
+            
+            return [TextContent(
+                type="text",
+                text=rewritten
+            )]
+    ```
+  </Tab>
+</Tabs>
+
+## Best Practices
+
+<Tip>
+**Start Simple:**
+- Begin with one or two filters
+- Keep filter logic focused and single-purpose
+- Test filters independently before chaining
+
+**Design for Reuse:**
+- Make filters generic and configurable
+- Use environment variables for filter-specific settings
+- Document filter inputs, outputs, and side effects
+
+**Handle Errors Gracefully:**
+- Use 4xx for expected policy violations (safe to show users)
+- Use 5xx for unexpected failures (needs investigation)
+- Include detailed error messages in responses
+
+**Monitor Performance:**
+- Each filter adds latency—keep them fast
+- Use async I/O for external calls (databases, APIs)
+- Cache frequently accessed data (user profiles, policies)
+
+**Evolve Carefully:**
+- Version your filters (include version in metadata)
+- Test changes in staging before production
+- Use feature flags for gradual rollouts
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent Orchestration" icon="robot" href="/features/agent-orchestration">
+    Learn how to attach filter chains to agents
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/features/observability">
+    See how filter execution appears in distributed traces
+  </Card>
+  <Card title="State Management" icon="database" href="/features/state-management">
+    Use conversation state in your filters
+  </Card>
+  <Card title="Configuration Reference" icon="book" href="/configuration/filters">
+    Complete filter configuration reference
+  </Card>
+</CardGroup>

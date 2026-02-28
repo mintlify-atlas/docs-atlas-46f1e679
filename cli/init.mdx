@@ -1,0 +1,518 @@
+---
+title: planoai init
+description: Initialize a new Plano project with configuration templates
+---
+
+The `planoai init` command creates a new Plano configuration file quickly using interactive wizards or command-line templates.
+
+## Basic Usage
+
+```bash
+planoai init
+```
+
+Launches an interactive wizard to select a template and output location.
+
+## Command Signature
+
+```bash
+planoai init [OPTIONS]
+```
+
+## Options
+
+<ParamField path="--template" type="string">
+  Create config from a built-in template ID (non-interactive).
+  
+  ```bash
+  planoai init --template coding_agent_routing
+  ```
+  
+  See `--list-templates` for available template IDs.
+</ParamField>
+
+<ParamField path="--clean" type="flag">
+  Create an empty `config.yaml` file with no contents.
+  
+  ```bash
+  planoai init --clean
+  ```
+  
+  Useful when you want to write configuration from scratch.
+</ParamField>
+
+<ParamField path="--output" type="string" default="config.yaml">
+  Where to write the generated configuration file.
+  
+  ```bash
+  planoai init --template preference_aware_routing --output production.yaml
+  ```
+</ParamField>
+
+<ParamField path="--force" type="flag">
+  Overwrite existing file if it already exists.
+  
+  ```bash
+  planoai init --template coding_agent_routing --force
+  ```
+  
+  <Warning>
+  Without `--force`, the command fails if the output file already exists.
+  </Warning>
+</ParamField>
+
+<ParamField path="--list-templates" type="flag">
+  List all available template IDs and descriptions, then exit.
+  
+  ```bash
+  planoai init --list-templates
+  ```
+</ParamField>
+
+## Available Templates
+
+Plano includes 5 built-in templates:
+
+<AccordionGroup>
+  <Accordion title="sub_agent_orchestration" icon="sitemap">
+    **Multi-agent routing across specialized agents**
+    
+    Use case: Route requests to different specialized agents based on task type.
+    
+    ```bash
+    planoai init --template sub_agent_orchestration
+    ```
+    
+    Includes:
+    - Multiple agent definitions
+    - Agent-based routing strategy
+    - Filter chains for context building
+  </Accordion>
+  
+  <Accordion title="coding_agent_routing" icon="code">
+    **Routing preferences + model aliases for coding tasks**
+    
+    Use case: Optimize model selection for software development workflows.
+    
+    ```bash
+    planoai init --template coding_agent_routing
+    ```
+    
+    Includes:
+    - Model aliases for common coding models
+    - Preference-based routing (latency vs quality)
+    - OpenAI/Anthropic provider configuration
+  </Accordion>
+  
+  <Accordion title="preference_aware_routing" icon="sliders">
+    **Automatic LLM routing based on preferences**
+    
+    Use case: Route requests based on latency, cost, or quality preferences.
+    
+    ```bash
+    planoai init --template preference_aware_routing
+    ```
+    
+    Includes:
+    - Preference routing strategy
+    - Multiple LLM providers
+    - Cost/latency trade-off configuration
+  </Accordion>
+  
+  <Accordion title="filter_chain_guardrails" icon="shield">
+    **Input guards, query rewrite, and context building**
+    
+    Use case: Add safety guardrails and prompt enhancement.
+    
+    ```bash
+    planoai init --template filter_chain_guardrails
+    ```
+    
+    Includes:
+    - PII detection filter
+    - Input validation guards
+    - Query rewrite filters
+    - Context injection
+  </Accordion>
+  
+  <Accordion title="conversational_state_v1_responses" icon="comments">
+    **Stateful responses with memory-backed storage**
+    
+    Use case: Build conversational agents with persistent state.
+    
+    ```bash
+    planoai init --template conversational_state_v1_responses
+    ```
+    
+    Includes:
+    - v1/responses API configuration
+    - State management setup
+    - Conversation history tracking
+  </Accordion>
+</AccordionGroup>
+
+## Interactive Mode
+
+When running `planoai init` without options, you get an interactive wizard:
+
+<Steps>
+  <Step title="Template Selection">
+    Choose from available templates or create a clean config:
+    
+    ```
+    ? Choose a template
+      ❯ Create a clean config.yaml (empty)
+        Sub Agent Orchestration — multi-agent routing across specialized agents
+        Coding Agent Routing — routing preferences + model aliases for coding tasks
+        Preference-aware LLM routing — automatic LLM routing based on preferences
+        Guardrails via Filter Chains — input guards, query rewrite, and context building
+        Conversational State via v1/responses — stateful responses with memory-backed storage
+    ```
+  </Step>
+  
+  <Step title="Output Location">
+    Specify where to write the configuration:
+    
+    ```
+    ? Where should I write the config? (config.yaml)
+    ```
+  </Step>
+  
+  <Step title="Overwrite Confirmation">
+    If the file exists, confirm overwriting:
+    
+    ```
+    ? config.yaml already exists. Overwrite? (y/N)
+    ```
+  </Step>
+  
+  <Step title="Preview">
+    See a preview of the generated configuration:
+    
+    ```
+    ✓ Wrote config.yaml (coding_agent_routing)
+    
+    ╭─ Config preview ────────────────────────────────────╮
+    │ listeners:                                          │
+    │   ingress_traffic:                                  │
+    │     type: prompt                                    │
+    │     port: 10000                                     │
+    │     router:                                         │
+    │       strategy: preference                          │
+    │ ...                                                 │
+    ╰─────────────────────────────────────────────────────╯
+    ```
+  </Step>
+</Steps>
+
+## Examples
+
+### Interactive wizard
+
+```bash
+planoai init
+```
+
+Use arrow keys to navigate, Enter to select.
+
+### Quick template creation
+
+```bash
+planoai init --template preference_aware_routing
+```
+
+**Output:**
+```
+✓ Wrote config.yaml (preference_aware_routing)
+
+╭─ Config preview ────────────────────────────────────╮
+│ listeners:                                          │
+│   ingress_traffic:                                  │
+│     type: prompt                                    │
+│     port: 10000                                     │
+│     router:                                         │
+│       strategy: preference                          │
+│       preferences:                                  │
+│         latency: 0.7                                │
+│         cost: 0.3                                   │
+│ ...                                                 │
+╰─────────────────────────────────────────────────────╯
+```
+
+### Create empty config
+
+```bash
+planoai init --clean
+```
+
+**Output:**
+```
+✓ Wrote config.yaml
+
+╭─ Config preview ────────────────────────────────────╮
+│ (empty)                                             │
+╰─────────────────────────────────────────────────────╯
+```
+
+### Save to custom location
+
+```bash
+planoai init --template coding_agent_routing --output ~/configs/dev.yaml
+```
+
+### Overwrite existing file
+
+```bash
+planoai init --template filter_chain_guardrails --force
+```
+
+### List all templates
+
+```bash
+planoai init --list-templates
+```
+
+**Output:**
+```
+Available templates
+
+  sub_agent_orchestration  - multi-agent routing across specialized agents
+  coding_agent_routing  - routing preferences + model aliases for coding tasks
+  preference_aware_routing  - automatic LLM routing based on preferences
+  filter_chain_guardrails  - input guards, query rewrite, and context building
+  conversational_state_v1_responses  - stateful responses with memory-backed storage
+```
+
+### Non-interactive mode for CI/CD
+
+```bash
+planoai init --template preference_aware_routing --output config.yaml --force
+```
+
+No prompts, always overwrites.
+
+## Template Contents
+
+All templates include:
+
+- **Listeners** — Ingress/egress traffic configuration
+- **Providers** — LLM provider setup with API keys
+- **Routing** — Strategy and preferences
+- **Comments** — Inline documentation
+- **Examples** — Ready-to-use configurations
+
+### Example: Coding Agent Routing Template
+
+```yaml
+listeners:
+  ingress_traffic:
+    type: prompt
+    port: 10000
+    router:
+      strategy: preference
+      preferences:
+        latency: 0.6
+        quality: 0.4
+
+  egress_traffic:
+    type: model
+    port: 12000
+
+model_aliases:
+  fast: claude-3-5-haiku-20241022
+  balanced: claude-3-5-sonnet-20241022
+  powerful: claude-3-7-sonnet-20250219
+
+llm_providers:
+  - provider: anthropic
+    models:
+      - claude-3-5-haiku-20241022
+      - claude-3-5-sonnet-20241022
+      - claude-3-7-sonnet-20250219
+    access_key: $ANTHROPIC_API_KEY
+
+  - provider: openai
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+```
+
+## After Initialization
+
+<Steps>
+  <Step title="Review the configuration">
+    ```bash
+    cat config.yaml
+    ```
+  </Step>
+  
+  <Step title="Set up API keys">
+    Create a `.env` file:
+    ```bash
+    echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
+    echo 'OPENAI_API_KEY=sk-...' >> .env
+    ```
+  </Step>
+  
+  <Step title="Customize as needed">
+    Edit `config.yaml` to adjust:
+    - Ports
+    - Model lists
+    - Routing preferences
+    - Filter chains
+  </Step>
+  
+  <Step title="Validate and start">
+    ```bash
+    planoai up
+    ```
+  </Step>
+</Steps>
+
+## Customizing Templates
+
+Templates are embedded in the `planoai` package at:
+```
+planoai/templates/
+├── sub_agent_orchestration.yaml
+├── coding_agent_routing.yaml
+├── preference_aware_routing.yaml
+├── filter_chain_guardrails.yaml
+└── conversational_state_v1_responses.yaml
+```
+
+<Note>
+To create custom templates for your team, fork the Plano repository and add YAML files to `cli/planoai/templates/`, then update the `BUILTIN_TEMPLATES` list in `init_cmd.py`.
+</Note>
+
+## Non-TTY Environments
+
+In non-TTY environments (CI/CD, scripts), interactive mode is disabled:
+
+```bash
+# This fails in CI
+planoai init
+
+# Error:
+Interactive mode requires a TTY.
+Use one of:
+  planoai init --template <id>
+  planoai init --clean
+  planoai init --list-templates
+```
+
+Always use explicit options in scripts:
+
+```bash
+#!/bin/bash
+planoai init --template preference_aware_routing --force
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="File already exists error">
+    **Error:**
+    ```
+    Refusing to overwrite existing file: config.yaml (use --force)
+    ```
+    
+    **Solution:**
+    ```bash
+    # Either backup the existing file
+    mv config.yaml config.yaml.bak
+    planoai init --template coding_agent_routing
+    
+    # Or use --force to overwrite
+    planoai init --template coding_agent_routing --force
+    ```
+  </Accordion>
+  
+  <Accordion title="Unknown template error">
+    **Error:**
+    ```
+    Unknown template: my_template
+    Run: planoai init --list-templates
+    ```
+    
+    **Solution:**
+    ```bash
+    # List available templates
+    planoai init --list-templates
+    
+    # Use exact template ID
+    planoai init --template coding_agent_routing
+    ```
+  </Accordion>
+  
+  <Accordion title="Interactive mode not working">
+    **Error:**
+    ```
+    Interactive mode requires a TTY.
+    ```
+    
+    **Cause:** Running in a non-interactive environment (script, SSH without -t).
+    
+    **Solution:**
+    ```bash
+    # Use non-interactive mode
+    planoai init --template preference_aware_routing
+    
+    # Or enable TTY in SSH
+    ssh -t user@host planoai init
+    ```
+  </Accordion>
+  
+  <Accordion title="Colors not displaying correctly">
+    **Issue:** Purple brand color appears as blue.
+    
+    **Cause:** Terminal doesn't support 24-bit truecolor.
+    
+    **Solution:**
+    ```bash
+    # Force truecolor support
+    export COLORTERM=truecolor
+    planoai init
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Configuration Validation
+
+After creating a config, validate it:
+
+```bash
+planoai up
+```
+
+If the configuration is invalid, you'll see validation errors:
+
+```
+Plano CLI v0.4.9
+
+✗ Validation failed
+  listeners.ingress_traffic.type: must be one of ['prompt', 'model', 'agent']
+```
+
+Fix the errors and try again.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Start Plano" icon="rocket" href="/cli/up">
+    Launch Plano with your new configuration
+  </Card>
+  
+  <Card title="Configuration Guide" icon="gear" href="/configuration/overview">
+    Learn about all configuration options
+  </Card>
+  
+  <Card title="Templates" icon="file-code" href="/examples/templates">
+    Explore template use cases
+  </Card>
+  
+  <Card title="Quick Start" icon="play" href="/get-started/quickstart">
+    Follow the complete quick start guide
+  </Card>
+</CardGroup>

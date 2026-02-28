@@ -1,0 +1,190 @@
+---
+title: CLI Reference
+description: Complete reference for the Plano command-line interface
+---
+
+The Plano CLI (`planoai`) is your primary interface for managing Plano instances, viewing traces, and initializing new projects.
+
+## Installation
+
+Install the Plano CLI via pip or uv:
+
+<CodeGroup>
+```bash pip
+pip install planoai
+```
+
+```bash uv
+uv pip install planoai
+```
+</CodeGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Initialize a new project">
+    Create a new Plano configuration from a template:
+    ```bash
+    planoai init
+    ```
+  </Step>
+  
+  <Step title="Start Plano">
+    Launch the Plano proxy server:
+    ```bash
+    planoai up
+    ```
+  </Step>
+  
+  <Step title="View logs">
+    Stream access logs to monitor requests:
+    ```bash
+    planoai logs --follow
+    ```
+  </Step>
+  
+  <Step title="Trace requests">
+    View distributed traces for debugging:
+    ```bash
+    planoai trace --list
+    ```
+  </Step>
+</Steps>
+
+## Available Commands
+
+The Plano CLI provides the following commands:
+
+<CardGroup cols={2}>
+  <Card title="planoai up" icon="arrow-up" href="/cli/up">
+    Start the Plano proxy server with your configuration
+  </Card>
+  
+  <Card title="planoai down" icon="arrow-down" href="/cli/down">
+    Stop the running Plano instance
+  </Card>
+  
+  <Card title="planoai build" icon="hammer" href="/cli/build">
+    Build Plano Docker image from source
+  </Card>
+  
+  <Card title="planoai logs" icon="file-lines" href="/cli/logs">
+    Stream access and debug logs
+  </Card>
+  
+  <Card title="planoai trace" icon="route" href="/cli/trace">
+    Collect and analyze OTEL traces
+  </Card>
+  
+  <Card title="planoai init" icon="wand-magic-sparkles" href="/cli/init">
+    Initialize a new Plano project
+  </Card>
+</CardGroup>
+
+## Global Options
+
+<ParamField path="--version" type="flag">
+  Show the Plano CLI version and check for updates.
+  
+  ```bash
+  planoai --version
+  ```
+  
+  **Example output:**
+  ```
+  plano version 0.4.9
+  ✓ You're up to date
+  ```
+</ParamField>
+
+<ParamField path="--help" type="flag">
+  Display help information for any command.
+  
+  ```bash
+  planoai --help
+  planoai up --help
+  ```
+</ParamField>
+
+## Environment Variables
+
+<ParamField path="LOG_LEVEL" type="string" default="info">
+  Set the logging verbosity level.
+  
+  **Options:** `debug`, `info`, `warning`, `error`
+  
+  ```bash
+  LOG_LEVEL=debug planoai up
+  ```
+</ParamField>
+
+<ParamField path="PLANO_SKIP_VERSION_CHECK" type="boolean">
+  Skip automatic version checking on CLI commands.
+  
+  ```bash
+  PLANO_SKIP_VERSION_CHECK=1 planoai up
+  ```
+</ParamField>
+
+<ParamField path="PLANO_DOCKER_IMAGE" type="string" default="katanemo/plano:0.4.9">
+  Override the default Plano Docker image.
+  
+  ```bash
+  PLANO_DOCKER_IMAGE=katanemo/plano:latest planoai up
+  ```
+</ParamField>
+
+## Terminal Output
+
+The Plano CLI uses rich terminal formatting with:
+
+- **Color-coded output** for better readability
+- **Status indicators** (✓, ✗, ⚠) for operation feedback
+- **Progress spinners** during long operations
+- **Interactive prompts** for configuration selection
+
+<Tip>
+The CLI automatically detects TTY capabilities and adjusts formatting accordingly. All colors and formatting work in modern terminals with truecolor support.
+</Tip>
+
+## Configuration Discovery
+
+By default, Plano looks for configuration files in this order:
+
+1. File specified via argument: `planoai up config.yaml`
+2. File in `--path` directory: `planoai up --path ./configs`
+3. Default `config.yaml` in current directory
+
+The configuration file must be a valid YAML file that passes schema validation.
+
+## Docker Requirements
+
+The Plano CLI requires Docker to be installed and running:
+
+- **Docker Engine** 20.10+ or **Docker Desktop**
+- Sufficient resources allocated (2GB+ RAM recommended)
+- Network access to pull `katanemo/plano` images
+
+<Warning>
+Plano runs as a Docker container managed by the CLI. Ensure Docker daemon is running before executing `planoai up`.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Start with planoai up" icon="rocket" href="/cli/up">
+    Learn about all startup options and configuration
+  </Card>
+  
+  <Card title="Initialize a project" icon="plus" href="/cli/init">
+    Create a new Plano config from templates
+  </Card>
+  
+  <Card title="Debug with traces" icon="magnifying-glass" href="/cli/trace">
+    Master distributed tracing for debugging
+  </Card>
+  
+  <Card title="Configuration Guide" icon="gear" href="/configuration/overview">
+    Explore all configuration options
+  </Card>
+</CardGroup>

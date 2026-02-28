@@ -1,0 +1,338 @@
+---
+title: "Examples"
+description: "Real-world demos showcasing Plano's capabilities for agentic applications"
+---
+
+Explore these working examples to see Plano in action. Each demo includes complete source code, configuration files, and step-by-step instructions.
+
+## Getting Started
+
+New to Plano? Start with these foundational examples:
+
+<CardGroup cols={2}>
+  <Card
+    title="Weather Forecast"
+    icon="cloud-sun"
+    href="https://github.com/katanemo/plano/tree/main/demos/getting_started/weather_forecast"
+  >
+    Core function calling with a weather query agent, interactive chat UI, and Jaeger tracing
+  </Card>
+  <Card
+    title="LLM Gateway"
+    icon="server"
+    href="https://github.com/katanemo/plano/tree/main/demos/getting_started/llm_gateway"
+  >
+    Key management and dynamic routing to multiple LLM providers with header-based model override
+  </Card>
+</CardGroup>
+
+## Agent Orchestration
+
+Learn how to build multi-agent systems with intelligent routing:
+
+<CardGroup cols={2}>
+  <Card
+    title="Travel Agents"
+    icon="plane"
+    href="https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/travel_agents"
+  >
+    Multi-agent travel booking with weather and flight agents, intelligent routing, and OpenTelemetry tracing
+  </Card>
+  <Card
+    title="Multi-Agent CrewAI & LangChain"
+    icon="users"
+    href="https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/multi_agent_crewai_langchain"
+  >
+    Framework-agnostic orchestration combining CrewAI and LangChain agents in unified conversations
+  </Card>
+</CardGroup>
+
+### Travel Agents Example
+
+This demo showcases how Plano intelligently routes requests across specialized agents:
+
+```yaml
+agents:
+  - id: weather_agent
+    url: http://localhost:10510
+  - id: flight_agent
+    url: http://localhost:10520
+
+listeners:
+  - type: agent
+    name: travel_assistant
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          Gets real-time weather and forecasts for any city worldwide.
+          Handles: "What's the weather in Paris?", "Will it rain in Tokyo?"
+      - id: flight_agent
+        description: |
+          Searches flights between airports with live status and schedules.
+          Handles: "Flights from NYC to LA", "Show me flights to Seattle"
+```
+
+**What you get:**
+- Automatic routing to the right agent based on user intent
+- Full conversation context across multiple agents
+- End-to-end OpenTelemetry tracing
+- No routing logic to maintain
+
+## LLM Routing
+
+Smart routing strategies for managing multiple LLM providers:
+
+<CardGroup cols={2}>
+  <Card
+    title="Preference-Based Routing"
+    icon="sliders"
+    href="https://github.com/katanemo/plano/tree/main/demos/llm_routing/preference_based_routing"
+  >
+    Routes prompts to LLMs based on user-defined preferences and task type (e.g. code generation vs. understanding)
+  </Card>
+  <Card
+    title="Model Alias Routing"
+    icon="tag"
+    href="https://github.com/katanemo/plano/tree/main/demos/llm_routing/model_alias_routing"
+  >
+    Maps semantic aliases (`arch.summarize.v1`) to provider-specific models for centralized governance
+  </Card>
+  <Card
+    title="Claude Code Router"
+    icon="code"
+    href="https://github.com/katanemo/plano/tree/main/demos/llm_routing/claude_code_router"
+  >
+    Extends Claude Code with multi-provider access and preference-aligned routing for coding tasks
+  </Card>
+</CardGroup>
+
+### Model Alias Example
+
+Define semantic aliases for centralized model management:
+
+```yaml
+model_aliases:
+  # Task-specific aliases
+  arch.summarize.v1:
+    target: gpt-4o-mini
+  arch.reasoning.v1:
+    target: gpt-4o
+  arch.creative.v1:
+    target: claude-3-5-sonnet-20241022
+  arch.fast.v1:
+    target: claude-3-haiku-20240307
+
+  # Semantic aliases
+  summary-model:
+    target: gpt-4o-mini
+  chat-model:
+    target: gpt-4o
+  creative-model:
+    target: claude-3-5-sonnet-20241022
+```
+
+Clients use friendly names instead of provider-specific models:
+
+```bash
+curl -X POST "http://localhost:12000/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "arch.summarize.v1",
+    "messages": [{"role": "user", "content": "Summarize this..."}]
+  }'
+```
+
+## Filter Chains
+
+Add guardrails, moderation, and context building:
+
+<CardGroup cols={2}>
+  <Card
+    title="HTTP Filter"
+    icon="filter"
+    href="https://github.com/katanemo/plano/tree/main/demos/filter_chains/http_filter"
+  >
+    RAG agent with filter chains for input validation, query rewriting, and context building
+  </Card>
+  <Card
+    title="MCP Filter"
+    icon="shield-check"
+    href="https://github.com/katanemo/plano/tree/main/demos/filter_chains/mcp_filter"
+  >
+    RAG agent using MCP-based filters for domain validation, query optimization, and knowledge base retrieval
+  </Card>
+</CardGroup>
+
+### MCP Filter Chain Example
+
+Build a RAG system with composable filters:
+
+```yaml
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    # Validates queries are within domain
+
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    # Rewrites queries for better retrieval
+
+  - id: context_builder
+    url: http://host.docker.internal:10502
+    # Augments with relevant context
+
+listeners:
+  - type: agent
+    name: rag_agent
+    port: 8001
+    filters:
+      - input_guards
+      - query_rewriter
+      - context_builder
+```
+
+## Integrations
+
+Connect Plano with third-party services:
+
+<CardGroup cols={2}>
+  <Card
+    title="Ollama Integration"
+    icon="cube"
+    href="https://github.com/katanemo/plano/tree/main/demos/integrations/ollama"
+  >
+    Use Ollama as a local LLM provider through Plano
+  </Card>
+  <Card
+    title="Spotify Bearer Auth"
+    icon="key"
+    href="https://github.com/katanemo/plano/tree/main/demos/integrations/spotify_bearer_auth"
+  >
+    Bearer token authentication for third-party APIs (Spotify new releases and top tracks)
+  </Card>
+</CardGroup>
+
+## Advanced Use Cases
+
+Production-ready patterns for complex scenarios:
+
+<CardGroup cols={2}>
+  <Card
+    title="Currency Exchange"
+    icon="dollar-sign"
+    href="https://github.com/katanemo/plano/tree/main/demos/advanced/currency_exchange"
+  >
+    Function calling with public REST APIs (Frankfurter currency exchange)
+  </Card>
+  <Card
+    title="Stock Quote"
+    icon="chart-line"
+    href="https://github.com/katanemo/plano/tree/main/demos/advanced/stock_quote"
+  >
+    Protected REST API integration with access key management
+  </Card>
+  <Card
+    title="Multi-Turn RAG"
+    icon="comments"
+    href="https://github.com/katanemo/plano/tree/main/demos/advanced/multi_turn_rag"
+  >
+    Multi-turn conversational RAG agent for answering questions about energy sources
+  </Card>
+  <Card
+    title="Model Choice Test Harness"
+    icon="flask"
+    href="https://github.com/katanemo/plano/tree/main/demos/advanced/model_choice_test_harness"
+  >
+    Evaluation framework for safely testing and switching between models with benchmark fixtures
+  </Card>
+</CardGroup>
+
+## Running the Examples
+
+All demos follow a consistent structure:
+
+<Steps>
+  <Step title="Install Prerequisites">
+    Follow the [prerequisites guide](/quickstart#prerequisites) to install Plano and set up your environment.
+  </Step>
+  <Step title="Set API Keys">
+    Export required API keys in your environment:
+    ```bash
+    export OPENAI_API_KEY="your-key-here"
+    export ANTHROPIC_API_KEY="your-key-here"
+    ```
+  </Step>
+  <Step title="Navigate to Demo">
+    ```bash
+    cd demos/<category>/<demo-name>/
+    ```
+  </Step>
+  <Step title="Start Services">
+    Most demos use Docker Compose:
+    ```bash
+    docker compose up --build
+    ```
+  </Step>
+  <Step title="Test the System">
+    Use the provided curl commands or web UI (typically at `http://localhost:8080` or `http://localhost:3001`).
+  </Step>
+</Steps>
+
+<Tip>
+  View traces in Jaeger at `http://localhost:16686` to see how requests flow through your agents and filters.
+</Tip>
+
+## Example Code Patterns
+
+### Simple Agent Implementation
+
+Your agents are just HTTP servers implementing the OpenAI chat completions endpoint:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from openai import AsyncOpenAI
+
+app = FastAPI()
+
+# Point to Plano's LLM gateway
+llm = AsyncOpenAI(base_url="http://localhost:12001/v1", api_key="EMPTY")
+
+@app.post("/v1/chat/completions")
+async def chat(request: Request):
+    body = await request.json()
+    messages = body.get("messages", [])
+    
+    # Your agent logic here
+    data = await fetch_data(messages)
+    
+    # Stream response through Plano
+    async def generate():
+        stream = await llm.chat.completions.create(
+            model="openai/gpt-4o",
+            messages=[{"role": "system", "content": f"Data: {data}"}, *messages],
+            stream=True
+        )
+        async for chunk in stream:
+            yield f"data: {chunk.model_dump_json()}\\n\\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+<Note>
+  Use any language or framework - Plano only requires an OpenAI-compatible HTTP endpoint.
+</Note>
+
+## Contributing Examples
+
+Have you built something cool with Plano? We'd love to include it in our examples!
+
+<Card
+  title="Contribute an Example"
+  icon="code-pull-request"
+  href="/resources/contributing"
+>
+  Learn how to contribute your demo to the Plano repository.
+</Card>

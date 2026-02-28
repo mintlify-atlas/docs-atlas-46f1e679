@@ -1,0 +1,213 @@
+---
+title: System Design
+description: Understanding Plano's architecture - Envoy proxy, WASM filters, and the brightstaff control plane
+---
+
+## Overview
+
+Plano is an AI-native proxy server and data plane for agentic applications, built on **Envoy proxy**. It centralizes agent orchestration, LLM routing, observability, and safety guardrails as an out-of-process dataplane.
+
+The architecture is designed around three core principles:
+
+- **Zero reimplementation** - Leverage Envoy's battle-tested transport substrate (TLS, HTTP/2, retries, connection pooling)
+- **In-process efficiency** - WASM filters run inside Envoy for zero-hop format translation and rate limiting
+- **Async orchestration** - A single native binary (brightstaff) handles all agentic logic without blocking threads
+
+<img src="/images/plano-system-architecture.png" alt="Plano System Architecture" />
+
+## Core Data Flow
+
+Requests flow through Envoy proxy with two WASM filter plugins, backed by a native Rust binary:
+
+```
+Client → Envoy (prompt_gateway.wasm → llm_gateway.wasm) → Agents/LLM Providers
+                              ↕
+                         brightstaff (native binary: state, routing, signals, tracing)
+```
+
+<Steps>
+  <Step title="Client Request">
+    Requests arrive at Envoy listeners on ports 8001+ (agents), 12000 (models), or 10000 (function calls)
+  </Step>
+  
+  <Step title="Prompt Gateway Filter">
+    The `prompt_gateway.wasm` filter processes prompts, applies guardrails, and manages filter chains
+  </Step>
+  
+  <Step title="Brightstaff Orchestration">
+    The brightstaff binary makes routing decisions, manages state, and coordinates agent/LLM selection
+  </Step>
+  
+  <Step title="LLM Gateway Filter">
+    The `llm_gateway.wasm` filter translates provider formats, applies rate limits, and collects metrics
+  </Step>
+  
+  <Step title="Upstream Dispatch">
+    Envoy handles TLS origination, connection pooling, retries, and forwards to LLM providers or agents
+  </Step>
+</Steps>
+
+## Two-Process Architecture
+
+Plano runs as **two self-contained processes** managed by supervisord:
+
+### 1. Envoy Proxy (with WASM filters)
+
+**Purpose:** HTTP-level networking and connection management
+
+- Protocol management (HTTP/1.1, HTTP/2)
+- Request ID generation and header sanitization
+- TLS termination and origination
+- Connection pooling and load balancing
+- Access logging and structured observability
+- WASM filter execution (prompt_gateway + llm_gateway)
+
+### 2. Brightstaff Controller
+
+**Purpose:** Agentic control plane and intelligent routing
+
+- Agent selection and orchestration
+- Model routing (alias resolution, preference-based selection)
+- Filter chain execution (guardrails, query rewrite, RAG)
+- Conversation state management (in-memory or PostgreSQL)
+- Signal analysis (loop detection, repetition scoring)
+- OpenTelemetry tracing integration
+
+<Note>
+  Brightstaff is async and non-blocking - it uses Tokio to handle thousands of concurrent requests without allocating a thread per request.
+</Note>
+
+## Why Envoy?
+
+Envoy provides the **transport substrate** so Plano never reimplements solved infrastructure problems:
+
+<CardGroup cols={2}>
+  <Card title="TLS Management" icon="lock">
+    SNI routing, certificate management, and secure upstream connections
+  </Card>
+  
+  <Card title="HTTP Codecs" icon="code">
+    Native HTTP/1.1 and HTTP/2 support with automatic protocol detection
+  </Card>
+  
+  <Card title="Retry & Backoff" icon="rotate">
+    Configurable retry policies, exponential backoff, and circuit breakers
+  </Card>
+  
+  <Card title="Connection Pools" icon="diagram-project">
+    Per-worker connection pooling with LOGICAL_DNS cluster resolution
+  </Card>
+</CardGroup>
+
+## Event-Based Threading Model
+
+Plano inherits [Envoy's threading model](https://blog.envoyproxy.io/envoy-threading-model-a8d44b922310):
+
+- **Main thread** - Server lifecycle, configuration processing, stats aggregation
+- **Worker threads** - Request processing (default: one per CPU core)
+- **Event loop** - Each worker runs a libevent loop for non-blocking I/O
+- **Thread affinity** - Each TCP connection is bound to exactly one worker thread for its lifetime
+
+<Tip>
+  Workers rarely share state and operate in a trivially parallel fashion, enabling linear scaling to high core counts.
+</Tip>
+
+## Network Topology
+
+<img src="/images/network-topology-ingress-egress.png" alt="Network Topology" />
+
+### Downstream (Ingress) Listeners
+
+Take requests from clients (web UI, applications) and route to agents or LLMs:
+
+- **Agent ports** (`:8001+`) - Route prompts to the right agent
+- **Model port** (`:12000`) - Direct LLM calls with model-alias translation
+- **Function-call port** (`:10000`) - Prompt-target dispatch with parameter extraction
+
+### Upstream (Egress) Clusters
+
+Forward requests to:
+
+- **LLM Providers** - OpenAI, Anthropic, Gemini, Mistral, Groq, DeepSeek, xAI, Together.ai, AWS Bedrock, Azure
+- **External Agents** - HTTP or MCP services for filter chains (input_guards, query_rewriter, context_builder)
+- **Tool/API Backends** - User-defined endpoints for function calling
+
+## How Plano is Different
+
+<Tabs>
+  <Tab title="Traditional Proxies">
+    - Separate service hops for format translation
+    - Thread-per-request blocking model
+    - Reimplemented HTTP/TLS stacks
+    - Limited observability integration
+  </Tab>
+  
+  <Tab title="Plano's Approach">
+    - **In-process WASM filters** - Zero-hop format translation inside Envoy
+    - **Async orchestration** - One binary handles all agentic logic without blocking
+    - **Envoy substrate** - Never reimplement TLS, HTTP codecs, or connection pooling
+    - **Built-in tracing** - Native OpenTelemetry integration from day one
+  </Tab>
+</Tabs>
+
+## Deployment Model
+
+Plano is designed to run **alongside your application servers**:
+
+- In your cloud VPC (AWS, GCP, Azure)
+- On-premises data centers
+- Local development (via Docker)
+- Kubernetes clusters (as a sidecar or gateway)
+
+<Warning>
+  Plano does not require GPUs. It's a proxy and control plane - the GPUs live where your models are hosted (third-party APIs or your own deployments).
+</Warning>
+
+## Configuration as Code
+
+The entire system is configured via a single YAML file (`plano_config.yaml`):
+
+```yaml
+agents:
+  - id: my-agent
+    url: http://agent-service:8000
+
+model_providers:
+  - model: gpt-4o
+    access_key_env: OPENAI_API_KEY
+
+listeners:
+  - port: 8001
+    type: agent
+    router: llm
+
+filters:
+  - id: input_guard
+    url: http://guardrail-service:8080
+
+tracing:
+  enabled: true
+  endpoint: http://jaeger:4317
+```
+
+See the [Configuration Reference](/configuration/overview) for complete details.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Request Lifecycle" icon="arrow-progress" href="/architecture/request-lifecycle">
+    Follow a request through the entire data plane
+  </Card>
+  
+  <Card title="Components" icon="cube" href="/architecture/components">
+    Deep dive into each Rust crate and WASM filter
+  </Card>
+  
+  <Card title="Envoy Integration" icon="diagram-nested" href="/architecture/envoy-integration">
+    How Plano extends Envoy with WASM filters
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Learn how to configure Plano for your use case
+  </Card>
+</CardGroup>

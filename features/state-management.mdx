@@ -1,0 +1,564 @@
+---
+title: State Management
+description: Multi-turn conversation handling with automatic state tracking and context propagation
+---
+
+Plano handles multi-turn conversations automatically, managing state across requests without requiring manual session management in your application code. This enables sophisticated conversational agents and RAG systems that understand context and handle follow-up questions seamlessly.
+
+## The Multi-Turn Challenge
+
+Developers often [struggle](https://www.reddit.com/r/LocalLLaMA/comments/18mqwg6/best_practice_for_rag_with_followup_chat/) to efficiently handle follow-up or clarification questions. When users ask for changes or additions to previous responses, it requires:
+
+<CardGroup cols={2}>
+  <Card title="Context Management" icon="brain">
+    Tracking conversation history, user preferences, and previous tool results across multiple turns
+  </Card>
+  <Card title="Intent Resolution" icon="bullseye">
+    Determining whether a new message is a follow-up, clarification, or new intent
+  </Card>
+  <Card title="Parameter Extraction" icon="filter">
+    Extracting parameters from context ("the weather there" → location from previous message)
+  </Card>
+  <Card title="State Synchronization" icon="sync">
+    Keeping state consistent across agents, filters, and LLM calls
+  </Card>
+</CardGroup>
+
+<Warning>
+Without proper state management, developers must re-write prompts using LLMs with precise prompt engineering techniques. This process is slow, manual, error-prone, and adds latency and token cost for common scenarios that can be managed more efficiently.
+</Warning>
+
+## Plano's Approach
+
+Plano is highly capable of accurately detecting and processing prompts in multi-turn scenarios, enabling you to build fast and accurate agents in minutes.
+
+<Steps>
+  <Step title="Automatic Intent Detection">
+    Plano analyzes each message to determine if it's a follow-up, clarification, new intent, or context switch
+  </Step>
+  <Step title="Context Resolution">
+    Extracts parameters from conversation history ("What's the weather there?" → location from previous turn)
+  </Step>
+  <Step title="State Propagation">
+    Conversation state flows through filter chains, agents, and LLM calls automatically
+  </Step>
+  <Step title="Parameter Enrichment">
+    Enriches requests with resolved parameters before forwarding to your backend services
+  </Step>
+</Steps>
+
+## Multi-Turn Patterns
+
+Plano handles common conversational patterns automatically:
+
+<Tabs>
+  <Tab title="Adjusting Retrieval">
+    Users refine or add to previous requests without repeating context.
+
+    ```text Example Conversation
+    User: What are the benefits of renewable energy?
+    [Plano]: Detected "get_info_for_energy_source" prompt target
+    [Plano]: Forwarding to configured endpoint
+    
+    Assistant: Renewable energy reduces greenhouse gas emissions, 
+    lowers air pollution, and provides sustainable power sources 
+    like solar and wind.
+
+    User: Include cost considerations in the response.
+    [Plano]: Follow-up detected. Forwarding with history
+    [Plano]: Adding parameter: consideration="cost"
+    
+    Assistant: Renewable energy reduces greenhouse gas emissions, 
+    lowers air pollution, and provides sustainable power sources. 
+    While initial setup costs can be high, long-term savings from 
+    reduced fuel expenses and government incentives make it 
+    cost-effective.
+    ```
+
+    **How it works:**
+    - Plano detects the follow-up intent
+    - Extracts new parameter (`cost`) from the request
+    - Forwards complete conversation history + new parameters
+    - Your backend receives enriched context
+  </Tab>
+  <Tab title="Switching Intent">
+    Users change topics while maintaining context from previous turns.
+
+    ```text Example Conversation
+    User: What are the symptoms of diabetes?
+    [Plano]: Detected "diseases_symptoms" prompt target
+    [Plano]: Forwarding disease=diabetes to endpoint
+    
+    Assistant: Common symptoms include frequent urination, 
+    excessive thirst, fatigue, and blurry vision.
+
+    User: How is it diagnosed?
+    [Plano]: New intent detected: "disease_diagnoses"
+    [Plano]: Forwarding disease=diabetes (from context) to new target
+    
+    Assistant: Diabetes is diagnosed through blood tests like 
+    fasting blood sugar, A1C, or an oral glucose tolerance test.
+    ```
+
+    **How it works:**
+    - Plano detects intent switch from symptoms to diagnosis
+    - Retains entity (diabetes) from previous context
+    - Routes to appropriate prompt target
+    - No need for user to repeat "diabetes"
+  </Tab>
+  <Tab title="Context References">
+    Users reference information from earlier in the conversation.
+
+    ```text Example Conversation
+    User: What's the weather in San Francisco?
+    [Plano]: Detected "get_weather" prompt target
+    [Plano]: Parameters: location="San Francisco"
+    
+    Assistant: San Francisco is currently 65°F with partly 
+    cloudy skies.
+
+    User: What about New York?
+    [Plano]: Follow-up with location change
+    [Plano]: Parameters: location="New York"
+    
+    Assistant: New York is currently 72°F with sunny skies.
+
+    User: Compare those two cities.
+    [Plano]: Context resolution from history
+    [Plano]: Parameters: cities=["San Francisco", "New York"]
+    
+    Assistant: San Francisco: 65°F, partly cloudy. 
+    New York: 72°F, sunny. New York is 7°F warmer.
+    ```
+
+    **How it works:**
+    - Plano tracks entities mentioned in conversation
+    - Resolves pronouns and references ("those two cities")
+    - Extracts structured parameters from context
+    - Your backend receives clean, resolved data
+  </Tab>
+</Tabs>
+
+## Configuration for Multi-Turn
+
+Multi-turn state management works automatically with prompt targets and agents. Here's a real configuration from the weather forecast demo:
+
+```yaml config.yaml
+version: v0.3.0
+
+listeners:
+  - type: prompt
+    name: prompt_listener
+    port: 10000
+  
+  - type: model
+    name: model_listener
+    port: 12000
+
+endpoints:
+  weather_forecast_service:
+    endpoint: host.docker.internal:18083
+    connect_timeout: 0.005s
+
+overrides:
+  # Confidence threshold for prompt target intent matching
+  prompt_target_intent_matching_threshold: 0.6
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+
+prompt_targets:
+  - name: get_current_weather
+    description: Get current weather at a location.
+    parameters:
+      - name: location
+        description: The location to get the weather for
+        required: true
+        type: string
+        format: City, State
+      - name: days
+        description: the number of days for the request
+        required: true
+        type: int
+    endpoint:
+      name: weather_forecast_service
+      path: /weather
+      http_method: POST
+  
+  - name: default_target
+    default: true
+    description: This is the default target for all unmatched prompts.
+    endpoint:
+      name: weather_forecast_service
+      path: /default_target
+      http_method: POST
+    system_prompt: |
+      You are a helpful assistant! Summarize the user's request 
+      and provide a helpful response.
+    auto_llm_dispatch_on_response: false
+
+tracing:
+  random_sampling: 100
+  trace_arch_internal: true
+```
+
+**Key configuration elements:**
+- `prompt_target_intent_matching_threshold`: Controls how confident Plano must be about intent (0.0-1.0)
+- `parameters`: Define what data to extract from prompts and conversation history
+- `auto_llm_dispatch_on_response`: Whether to forward backend response to LLM for summarization
+
+## Backend Implementation
+
+Your backend receives enriched requests with resolved parameters. Here's a Flask example handling multi-turn requests:
+
+<CodeGroup>
+```python Flask Backend
+from flask import Flask, request, jsonify
+import time
+
+app = Flask(__name__)
+
+@app.route('/weather', methods=['POST'])
+def get_weather():
+    # Plano extracts and resolves parameters automatically
+    data = request.json
+    location = data.get('location')  # Resolved from context if needed
+    days = data.get('days', 1)
+    
+    # Your business logic - no manual context handling needed
+    weather_data = fetch_weather(location, days)
+    
+    return jsonify({
+        'location': location,
+        'forecast': weather_data,
+        'timestamp': time.time()
+    })
+
+@app.route('/default_target', methods=['POST'])
+def default_handler():
+    data = request.json
+    messages = data.get('messages', [])
+    
+    # Handle unmatched prompts
+    return jsonify({
+        'response': 'I can help with weather information. '
+                   'Just ask about the weather in any city!'
+    })
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=18083)
+```
+
+```python With Conversation History
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/rag', methods=['POST'])
+def rag_query():
+    data = request.json
+    
+    # Current query (already resolved by Plano)
+    query = data.get('query')
+    
+    # Full conversation history (managed by Plano)
+    messages = data.get('messages', [])
+    
+    # Metadata from Plano
+    metadata = data.get('metadata', {})
+    is_followup = metadata.get('is_followup', False)
+    
+    if is_followup:
+        # Use conversation history for context-aware retrieval
+        context = build_context_from_history(messages)
+        results = retrieve_with_context(query, context)
+    else:
+        # First turn - standard retrieval
+        results = retrieve(query)
+    
+    return jsonify({
+        'results': results,
+        'metadata': {
+            'query': query,
+            'is_followup': is_followup,
+            'turns': len(messages)
+        }
+    })
+```
+
+```python With State Access
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# In-memory state (use Redis/database in production)
+conversation_state = {}
+
+@app.route('/agent', methods=['POST'])
+def agent_handler():
+    data = request.json
+    
+    # Plano includes conversation ID for state tracking
+    conversation_id = data.get('conversation_id')
+    messages = data.get('messages', [])
+    
+    # Get or create state for this conversation
+    state = conversation_state.get(conversation_id, {})
+    
+    # Update state with new information
+    state['turn_count'] = state.get('turn_count', 0) + 1
+    state['last_intent'] = data.get('metadata', {}).get('intent')
+    
+    # Your agent logic here
+    response = process_with_state(messages, state)
+    
+    # Save updated state
+    conversation_state[conversation_id] = state
+    
+    return jsonify({
+        'response': response,
+        'state': state
+    })
+```
+</CodeGroup>
+
+## Parameter Definition
+
+Define parameters in your prompt targets to specify what data Plano should extract:
+
+<Tabs>
+  <Tab title="Basic Parameters">
+    Simple parameter definitions for common use cases:
+
+    ```yaml
+    prompt_targets:
+      - name: get_weather
+        description: Get the current weather for a location
+        parameters:
+          - name: location
+            description: The city and state, e.g. San Francisco, CA
+            type: string
+            required: true
+          
+          - name: unit
+            description: The unit of temperature
+            type: string
+            default: fahrenheit
+            enum: [celsius, fahrenheit]
+    ```
+  </Tab>
+  <Tab title="Advanced Parameters">
+    Use all parameter attributes for complex scenarios:
+
+    ```yaml
+    prompt_targets:
+      - name: book_flight
+        description: Book a flight between two cities
+        parameters:
+          - name: origin
+            description: Departure city
+            type: string
+            required: true
+          
+          - name: destination
+            description: Arrival city
+            type: string
+            required: true
+          
+          - name: date
+            description: Departure date
+            type: string
+            required: true
+            format: YYYY-MM-DD
+          
+          - name: passengers
+            description: Number of passengers
+            type: int
+            default: 1
+          
+          - name: class
+            description: Seat class
+            type: string
+            default: economy
+            enum: [economy, business, first]
+          
+          - name: preferences
+            description: Additional preferences
+            type: dict
+            required: false
+            items:
+              type: string
+    ```
+  </Tab>
+  <Tab title="Path Parameters">
+    Include parameters in the endpoint URL path:
+
+    ```yaml
+    prompt_targets:
+      - name: get_stock_quote
+        description: Get current stock price
+        parameters:
+          - name: symbol
+            description: Stock symbol (e.g., AAPL, GOOGL)
+            type: string
+            required: true
+            in_path: true  # Include in URL path
+          
+          - name: interval
+            description: Time interval for quote
+            type: string
+            default: 1day
+            enum: [1h, 1day]
+        endpoint:
+          name: stock_api
+          path: /quote/{symbol}  # symbol injected here
+          http_method: GET
+    ```
+  </Tab>
+</Tabs>
+
+## Supported Parameter Types
+
+<Info>
+Plano supports rich parameter types with validation:
+
+| Type | Description | Example |
+|------|-------------|--------|
+| `string` | Text value | `"San Francisco"` |
+| `int` | Integer number | `42` |
+| `float` | Decimal number | `3.14` |
+| `bool` | Boolean value | `true` |
+| `list` | Array of values | `["apple", "banana"]` |
+| `set` | Unique values | `{1, 2, 3}` |
+| `dict` | Key-value pairs | `{"key": "value"}` |
+| `tuple` | Ordered values | `("a", "b")` |
+</Info>
+
+## Real-World Example: Multi-Turn RAG
+
+Here's a complete example from the multi-turn RAG demo:
+
+```yaml config.yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://host.docker.internal:10505
+
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+  - id: context_builder
+    url: http://host.docker.internal:10502
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+
+model_aliases:
+  fast-llm:
+    target: gpt-4o-mini
+  smart-llm:
+    target: gpt-4o
+
+listeners:
+  - type: agent
+    name: agent_1
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: virtual assistant for retrieval augmented generation tasks
+        filter_chain:
+          - input_guards
+          - query_rewriter
+          - context_builder
+
+tracing:
+  random_sampling: 100
+```
+
+**Conversation flow:**
+1. User sends initial query → Plano creates new conversation state
+2. Query flows through filter chain (guards → rewriter → context builder)
+3. Enriched query reaches RAG agent with conversation history
+4. Agent returns response; Plano updates conversation state
+5. User sends follow-up → Plano detects follow-up, resolves context
+6. Repeat steps 2-4 with full conversation history
+
+## Key Benefits
+
+<CardGroup cols={2}>
+  <Card title="Zero Manual State Management" icon="wand-magic-sparkles">
+    No session stores, no context juggling. Plano handles it automatically.
+  </Card>
+  <Card title="Automatic Intent Detection" icon="brain">
+    Plano analyzes each message to determine if it's a follow-up, clarification, or new intent.
+  </Card>
+  <Card title="Parameter Resolution" icon="link">
+    References like "there", "that city", "those two" are resolved from conversation history.
+  </Card>
+  <Card title="Clean Backend Code" icon="code">
+    Your services receive structured, resolved parameters—no prompt engineering needed.
+  </Card>
+  <Card title="Multi-Turn RAG" icon="book">
+    Build conversational RAG systems that understand context across turns.
+  </Card>
+  <Card title="Observable State" icon="eye">
+    Conversation state and transitions are visible in distributed traces.
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Tip>
+**Intent Matching:**
+- Start with default threshold (0.6) and tune based on your use case
+- Higher threshold (0.8+) for critical intents requiring high precision
+- Lower threshold (0.4-0.6) for exploratory conversational agents
+
+**Parameter Design:**
+- Mark critical parameters as `required: true`
+- Provide sensible `default` values when possible
+- Use `enum` to constrain values to valid options
+- Add clear `description` for each parameter (helps intent matching)
+
+**State Management:**
+- Use `conversation_id` from Plano for session tracking
+- Store agent-specific state in external store (Redis, database)
+- Include state version/timestamp for debugging
+- Clean up old conversation state periodically
+
+**Testing:**
+- Test with realistic multi-turn conversations, not just single queries
+- Verify parameter resolution across context switches
+- Check behavior with ambiguous references
+- Monitor intent matching confidence in production
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Filter Chains" icon="filter" href="/features/filter-chains">
+    Use conversation state in filters for context enrichment
+  </Card>
+  <Card title="Agent Orchestration" icon="robot" href="/features/agent-orchestration">
+    Build multi-agent systems with state propagation
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/features/observability">
+    Monitor conversation state and transitions in traces
+  </Card>
+  <Card title="Configuration Reference" icon="book" href="/configuration/prompt-targets">
+    Complete prompt target and parameter reference
+  </Card>
+</CardGroup>

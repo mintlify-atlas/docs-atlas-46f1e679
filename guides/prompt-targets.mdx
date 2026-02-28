@@ -1,0 +1,656 @@
+---
+title: Prompt Targets & Function Calling
+description: Turn natural language prompts into deterministic API calls with Plano's function calling and prompt target system
+---
+
+Prompt Targets enable you to map natural language prompts to backend function calls with automatic parameter extraction and validation. This bridges the gap between conversational AI and functional business logic.
+
+## What Are Prompt Targets?
+
+Prompt Targets are configurations that tell Plano:
+
+1. **What function to call** - The backend endpoint or API
+2. **What parameters to extract** - Which values to pull from the user's prompt
+3. **How to validate inputs** - Required fields, types, and constraints
+4. **How to format responses** - How to present results to users
+
+<Info>
+Prompt Targets use the Arch-Function collection of LLMs - state-of-the-art models optimized for function calling tasks, achieving GPT-4 level performance at a fraction of the cost.
+</Info>
+
+## Function Calling Workflow
+
+When a user sends a prompt, Plano handles the complete workflow:
+
+```
+User Prompt
+    ↓
+1. Intent Analysis
+   (Arch-Function determines which function to call)
+    ↓
+2. Parameter Extraction
+   (Extract required values from natural language)
+    ↓
+3. Validation
+   (Check types, required fields, enums)
+    ↓
+4. Function Invocation
+   (Call backend API/service)
+    ↓
+5. Response Generation
+   (Format result for user)
+    ↓
+Natural Language Response
+```
+
+## Basic Example: Weather API
+
+Let's build a weather lookup function with prompt targets.
+
+<Steps>
+
+<Step title="Define the backend function">
+
+Create a simple weather API endpoint:
+
+```python weather_api.py
+from fastapi import FastAPI, HTTPException
+import requests
+
+app = FastAPI()
+
+@app.get("/weather")
+def get_weather(location: str, unit: str = "fahrenheit"):
+    """Get current weather for a location."""
+    
+    if unit not in ["celsius", "fahrenheit"]:
+        raise HTTPException(400, "Invalid unit")
+    
+    # Call real weather API (simplified)
+    api_url = "https://api.open-meteo.com/v1/forecast"
+    # ... geocoding and API logic ...
+    
+    return {
+        "location": location,
+        "temperature": 72,
+        "unit": unit,
+        "conditions": "partly cloudy"
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
+```
+</Step>
+
+<Step title="Configure the prompt target">
+
+Define how Plano should map prompts to your function:
+
+```yaml config.yaml
+version: v0.3.0
+
+endpoints:
+  weather_api:
+    endpoint: http://localhost:8080
+    protocol: http
+    connect_timeout: 5s
+
+prompt_targets:
+  - name: get_weather
+    description: Get the current weather for a location
+    parameters:
+      - name: location
+        description: The city and state, e.g. San Francisco, New York
+        type: str
+        required: true
+      
+      - name: unit
+        description: The unit of temperature to return
+        type: str
+        enum: ["celsius", "fahrenheit"]
+        required: false
+    
+    endpoint:
+      name: weather_api
+      path: /weather
+
+listeners:
+  - type: prompt
+    name: weather_service
+    port: 10000
+    timeout: 30s
+
+tracing:
+  random_sampling: 100
+```
+</Step>
+
+<Step title="Start services">
+
+```bash
+# Terminal 1: Start weather API
+python weather_api.py
+
+# Terminal 2: Start Plano
+planoai up config.yaml
+```
+</Step>
+
+<Step title="Test with natural language">
+
+```bash
+curl http://localhost:10000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": "What is the weather like in Seattle?"
+    }]
+  }'
+```
+
+Plano automatically:
+1. Extracts `location="Seattle"`
+2. Validates parameters
+3. Calls `GET /weather?location=Seattle&unit=fahrenheit`
+4. Formats response: "The weather in Seattle is partly cloudy with a temperature of 72°F."
+</Step>
+
+</Steps>
+
+## Advanced Parameter Extraction
+
+### Complex Types
+
+Support nested objects and arrays:
+
+```yaml config.yaml
+prompt_targets:
+  - name: book_flight
+    description: Book a flight between two cities
+    parameters:
+      - name: origin
+        description: Departure city and airport code
+        type: str
+        required: true
+      
+      - name: destination
+        description: Arrival city and airport code
+        type: str
+        required: true
+      
+      - name: date
+        description: Travel date in YYYY-MM-DD format
+        type: str
+        required: true
+      
+      - name: passengers
+        description: Number of passengers
+        type: int
+        required: false
+      
+      - name: class
+        description: Cabin class preference
+        type: str
+        enum: ["economy", "business", "first"]
+        required: false
+    
+    endpoint:
+      name: flight_api
+      path: /book
+```
+
+Handles prompts like:
+
+```
+"Book 2 business class tickets from NYC to London on 2026-05-15"
+```
+
+Extracts:
+```json
+{
+  "origin": "NYC",
+  "destination": "London",
+  "date": "2026-05-15",
+  "passengers": 2,
+  "class": "business"
+}
+```
+
+### Default Values
+
+Provide fallbacks for optional parameters:
+
+```yaml config.yaml
+prompt_targets:
+  - name: search_products
+    parameters:
+      - name: query
+        type: str
+        required: true
+      
+      - name: limit
+        type: int
+        required: false
+        default: 10
+      
+      - name: sort_by
+        type: str
+        enum: ["price", "rating", "popularity"]
+        required: false
+        default: "popularity"
+```
+
+### Validation Rules
+
+Enforce constraints:
+
+```yaml config.yaml
+prompt_targets:
+  - name: transfer_funds
+    parameters:
+      - name: amount
+        type: float
+        required: true
+        minimum: 0.01
+        maximum: 10000.00
+      
+      - name: recipient
+        type: str
+        required: true
+        pattern: "^[a-zA-Z0-9]+$"  # Alphanumeric only
+      
+      - name: currency
+        type: str
+        enum: ["USD", "EUR", "GBP"]
+        required: true
+```
+
+<Warning>
+Always validate sensitive operations like transfers. Plano checks constraints before calling your endpoint.
+</Warning>
+
+## Multiple Function Calling
+
+Arch-Function supports parallel and multiple function calls in a single request.
+
+### Parallel Function Calling
+
+Call the same function multiple times with different parameters:
+
+```yaml config.yaml
+prompt_targets:
+  - name: get_weather
+    description: Get weather for a location
+    parameters:
+      - name: location
+        type: str
+        required: true
+```
+
+Prompt: "What's the weather in Paris, London, and Tokyo?"
+
+Plano calls `get_weather` three times in parallel:
+
+```json
+[
+  {"function": "get_weather", "args": {"location": "Paris"}},
+  {"function": "get_weather", "args": {"location": "London"}},
+  {"function": "get_weather", "args": {"location": "Tokyo"}}
+]
+```
+
+### Multiple Function Calling
+
+Call different functions in one request:
+
+```yaml config.yaml
+prompt_targets:
+  - name: get_weather
+    description: Get current weather
+    parameters:
+      - name: location
+        type: str
+        required: true
+  
+  - name: get_flight_status
+    description: Check flight status
+    parameters:
+      - name: flight_number
+        type: str
+        required: true
+```
+
+Prompt: "What's the weather in Seattle and status of flight AA123?"
+
+Plano calls both functions:
+
+```json
+[
+  {"function": "get_weather", "args": {"location": "Seattle"}},
+  {"function": "get_flight_status", "args": {"flight_number": "AA123"}}
+]
+```
+
+## Generating Prompt Targets from Code
+
+The Plano CLI can auto-generate prompt target configs from Python functions:
+
+```python functions.py
+def get_weather(location: str, unit: str = "fahrenheit") -> dict:
+    """Get the current weather for a location.
+    
+    Args:
+        location: The city and state, e.g. San Francisco
+        unit: Temperature unit (celsius or fahrenheit)
+    
+    Returns:
+        Weather data including temperature and conditions
+    """
+    # Implementation
+    pass
+
+def convert_currency(amount: float, from_currency: str, to_currency: str) -> float:
+    """Convert an amount between currencies.
+    
+    Args:
+        amount: The amount to convert
+        from_currency: Source currency code (USD, EUR, GBP)
+        to_currency: Target currency code
+    
+    Returns:
+        Converted amount
+    """
+    # Implementation
+    pass
+```
+
+Generate configuration:
+
+```bash
+planoai generate_prompt_targets functions.py --output prompt_targets.yaml
+```
+
+Produces:
+
+```yaml prompt_targets.yaml
+prompt_targets:
+  - name: get_weather
+    description: Get the current weather for a location
+    parameters:
+      - name: location
+        description: The city and state, e.g. San Francisco
+        type: str
+        required: true
+      - name: unit
+        description: Temperature unit (celsius or fahrenheit)
+        type: str
+        required: false
+    endpoint:
+      name: functions_api
+      path: /get_weather
+  
+  - name: convert_currency
+    description: Convert an amount between currencies
+    parameters:
+      - name: amount
+        description: The amount to convert
+        type: float
+        required: true
+      - name: from_currency
+        description: Source currency code (USD, EUR, GBP)
+        type: str
+        required: true
+      - name: to_currency
+        description: Target currency code
+        type: str
+        required: true
+    endpoint:
+      name: functions_api
+      path: /convert_currency
+```
+
+<Tip>
+Use docstrings with clear parameter descriptions - they become the prompt target descriptions that guide parameter extraction.
+</Tip>
+
+## Real-World Example: Currency Exchange
+
+Complete implementation with external API:
+
+<CodeGroup>
+```yaml config.yaml
+version: v0.3.0
+
+endpoints:
+  frankfurter_api:
+    endpoint: https://api.frankfurter.app
+    protocol: https
+    connect_timeout: 10s
+
+prompt_targets:
+  - name: convert_currency
+    description: |
+      Convert an amount from one currency to another using live exchange rates.
+      Supports USD, EUR, GBP, JPY, AUD, CAD, CHF, CNY, and many others.
+    
+    parameters:
+      - name: amount
+        description: The amount to convert (must be positive)
+        type: float
+        required: true
+        minimum: 0.01
+      
+      - name: from
+        description: Source currency code (e.g., USD, EUR, GBP)
+        type: str
+        required: true
+      
+      - name: to
+        description: Target currency code (e.g., USD, EUR, GBP)
+        type: str
+        required: true
+    
+    endpoint:
+      name: frankfurter_api
+      path: /latest
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: prompt
+    name: currency_exchange
+    port: 10000
+
+tracing:
+  random_sampling: 100
+```
+
+```bash test.sh
+# Start Plano
+planoai up config.yaml
+
+# Test natural language queries
+curl http://localhost:10000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": "How much is 100 USD in EUR?"
+    }]
+  }'
+
+curl http://localhost:10000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": "Convert 5000 Japanese Yen to British Pounds"
+    }]
+  }'
+```
+</CodeGroup>
+
+Plano automatically:
+- Extracts amounts and currency codes
+- Validates parameters
+- Calls Frankfurter API
+- Formats responses naturally
+
+## Configuration Reference
+
+### Prompt Target Schema
+
+```yaml
+prompt_targets:
+  - name: string              # Function identifier
+    description: string       # What the function does
+    parameters:               # Array of parameters
+      - name: string          # Parameter name
+        description: string   # Parameter description
+        type: str|int|float|bool  # Data type
+        required: bool        # Is required?
+        enum: [values]        # Allowed values
+        default: value        # Default value
+        minimum: number       # Min value (numbers)
+        maximum: number       # Max value (numbers)
+        pattern: regex        # Validation regex
+    endpoint:
+      name: string            # Endpoint name from endpoints section
+      path: string            # API path
+```
+
+### Endpoint Configuration
+
+```yaml
+endpoints:
+  endpoint_name:
+    endpoint: string          # Base URL
+    protocol: http|https      # Protocol
+    connect_timeout: string   # Timeout (e.g., "10s")
+    http_host: string         # Host header override
+```
+
+## Error Handling
+
+### Missing Required Parameters
+
+Plano prompts users for missing information:
+
+```
+User: "What's the weather?"
+Plano: "I need to know the location. Which city would you like weather for?"
+
+User: "Seattle"
+Plano: "The weather in Seattle is partly cloudy, 72°F."
+```
+
+### Invalid Parameter Values
+
+Validation errors are caught before API calls:
+
+```yaml
+prompt_targets:
+  - name: set_temperature
+    parameters:
+      - name: temp
+        type: int
+        minimum: 60
+        maximum: 80
+```
+
+```
+User: "Set temperature to 95 degrees"
+Plano: "Temperature must be between 60 and 80 degrees."
+```
+
+### API Failures
+
+Graceful degradation with error messages:
+
+```
+User: "What's the weather in XYZ?"
+Plano: "I couldn't find weather data for XYZ. Please check the city name."
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Write clear parameter descriptions">
+    Good descriptions help Arch-Function extract parameters accurately:
+    
+    ```yaml
+    # Good
+    - name: date
+      description: Travel date in YYYY-MM-DD format, e.g., 2026-05-15
+    
+    # Bad
+    - name: date
+      description: date
+    ```
+  </Accordion>
+  
+  <Accordion title="Use enums for constrained values">
+    Limit choices to valid options:
+    
+    ```yaml
+    - name: size
+      type: str
+      enum: ["small", "medium", "large"]
+    ```
+  </Accordion>
+  
+  <Accordion title="Provide sensible defaults">
+    Reduce friction for optional parameters:
+    
+    ```yaml
+    - name: limit
+      type: int
+      required: false
+      default: 10
+    ```
+  </Accordion>
+  
+  <Accordion title="Validate sensitive operations">
+    Use minimum/maximum for financial transactions:
+    
+    ```yaml
+    - name: amount
+      type: float
+      minimum: 0.01
+      maximum: 10000.00
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Demo Examples
+
+Explore complete implementations:
+
+<CardGroup cols={2}>
+  <Card title="Currency Exchange" icon="dollar-sign" href="https://github.com/katanemo/plano/tree/main/demos/advanced/currency_exchange">
+    Function calling with Frankfurter API
+  </Card>
+  
+  <Card title="Stock Quotes" icon="chart-line" href="https://github.com/katanemo/plano/tree/main/demos/advanced/stock_quote">
+    Protected API integration with access keys
+  </Card>
+  
+  <Card title="Weather Forecast" icon="cloud" href="https://github.com/katanemo/plano/tree/main/demos/getting_started/weather_forecast">
+    Core function calling with interactive UI
+  </Card>
+  
+  <Card title="Multi-Turn RAG" icon="messages" href="https://github.com/katanemo/plano/tree/main/demos/advanced/multi_turn_rag">
+    Complex multi-function conversations
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Add Guardrails" icon="shield" href="/guides/guardrails">
+  Learn how to validate and sanitize inputs before function calls
+</Card>

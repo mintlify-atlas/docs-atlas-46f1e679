@@ -1,0 +1,557 @@
+---
+title: Building Agents
+description: Create intelligent agents that work with Plano's orchestration layer for multi-turn conversations and tool usage
+---
+
+Agents in Plano are HTTP services that implement the OpenAI-compatible chat completions endpoint. Plano handles the orchestration layer - routing requests to the right agent based on user intent - while your agents focus on domain-specific logic.
+
+## Agent Architecture
+
+Plano's agent system follows an **inner loop / outer loop** pattern:
+
+- **Outer Loop (Plano)**: Intent analysis, agent selection, routing, and observability
+- **Inner Loop (Your Agent)**: Tool invocation, API calls, reasoning, and response generation
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ User: "What's the weather in Paris and flights from NYC?"  │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+        ┌─────────────────────────────┐
+        │  Plano Orchestrator         │ ◄── Outer Loop
+        │  (Plano-Orchestrator-30B)   │
+        └─────────────┬───────────────┘
+                      │
+          ┌───────────┴───────────┐
+          ▼                       ▼
+    ┌──────────┐          ┌──────────────┐
+    │ Weather  │          │   Flight     │  ◄── Inner Loop
+    │  Agent   │          │   Agent      │       (Your Code)
+    └──────────┘          └──────────────┘
+```
+
+## Creating Your First Agent
+
+Let's build a weather agent that fetches real-time data and generates natural language responses.
+
+<Steps>
+
+<Step title="Set up the project structure">
+
+```bash
+mkdir weather-agent && cd weather-agent
+touch weather_agent.py requirements.txt
+```
+
+Add dependencies:
+
+```txt requirements.txt
+fastapi==0.115.0
+uvicorn==0.32.0
+openai==1.54.0
+httpx==0.27.0
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp==1.27.0
+```
+</Step>
+
+<Step title="Implement the agent server">
+
+Create a FastAPI server with OpenAI-compatible endpoint:
+
+```python weather_agent.py
+import os
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from openai import AsyncOpenAI
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configuration
+LLM_GATEWAY_ENDPOINT = os.getenv(
+    "LLM_GATEWAY_ENDPOINT", 
+    "http://localhost:12000/v1"
+)
+WEATHER_MODEL = "openai/gpt-5.2"
+LOCATION_MODEL = "openai/gpt-4o-mini"  # Faster model for extraction
+
+# Initialize OpenAI client pointing to Plano's gateway
+openai_client = AsyncOpenAI(
+    base_url=LLM_GATEWAY_ENDPOINT,
+    api_key="EMPTY"
+)
+
+app = FastAPI(title="Weather Agent")
+
+@app.post("/v1/chat/completions")
+async def chat(request: Request):
+    """OpenAI-compatible chat completions endpoint."""
+    body = await request.json()
+    messages = body.get("messages", [])
+    
+    # Extract location from conversation
+    location = await extract_location(messages)
+    
+    # Fetch weather data
+    weather_data = await get_weather_data(location)
+    
+    # Generate response
+    return StreamingResponse(
+        generate_response(messages, weather_data),
+        media_type="text/event-stream"
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10510)
+```
+</Step>
+
+<Step title="Implement extraction logic">
+
+Use a small LLM to extract structured information:
+
+```python weather_agent.py
+async def extract_location(messages: list) -> str:
+    """Extract city name from conversation using LLM."""
+    
+    instructions = """You are a city name extractor. 
+    Look at the FINAL user message and extract the city name.
+    
+    Examples:
+    - "What's the weather in Seattle?" → Seattle
+    - "How's the weather in Tokyo today?" → Tokyo
+    - "What about Dubai?" → Dubai
+    
+    Output ONLY the city name. If no city found, output: NOT_FOUND"""
+    
+    extraction_messages = [
+        {"role": "system", "content": instructions},
+        *messages
+    ]
+    
+    try:
+        response = await openai_client.chat.completions.create(
+            model=LOCATION_MODEL,
+            messages=extraction_messages,
+            temperature=0.0,
+            max_tokens=50
+        )
+        
+        location = response.choices[0].message.content.strip()
+        
+        if not location or location.upper() == "NOT_FOUND":
+            location = "New York"  # Fallback
+        
+        logger.info(f"Extracted location: {location}")
+        return location
+        
+    except Exception as e:
+        logger.error(f"Extraction failed: {e}")
+        return "New York"
+```
+
+<Info>
+Use smaller, faster models like `gpt-4o-mini` for extraction tasks to reduce latency and cost.
+</Info>
+</Step>
+
+<Step title="Call external APIs">
+
+Fetch real-time data from external services:
+
+```python weather_agent.py
+async def get_weather_data(location: str) -> dict:
+    """Fetch weather data from Open-Meteo API."""
+    
+    try:
+        # First, geocode the location
+        geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
+        async with httpx.AsyncClient() as client:
+            geo_response = await client.get(
+                geocoding_url,
+                params={"name": location, "count": 1}
+            )
+            geo_data = geo_response.json()
+            
+            if not geo_data.get("results"):
+                return {"error": f"Location '{location}' not found"}
+            
+            result = geo_data["results"][0]
+            lat, lon = result["latitude"], result["longitude"]
+            city_name = result["name"]
+            
+            # Fetch weather data
+            weather_url = "https://api.open-meteo.com/v1/forecast"
+            weather_response = await client.get(
+                weather_url,
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "temperature_2m,weathercode,windspeed_10m",
+                    "daily": "temperature_2m_max,temperature_2m_min",
+                    "timezone": "auto"
+                }
+            )
+            weather_data = weather_response.json()
+            
+            return {
+                "location": city_name,
+                "current_temp": weather_data["current"]["temperature_2m"],
+                "wind_speed": weather_data["current"]["windspeed_10m"],
+                "daily_high": weather_data["daily"]["temperature_2m_max"][0],
+                "daily_low": weather_data["daily"]["temperature_2m_min"][0]
+            }
+            
+    except Exception as e:
+        logger.error(f"Weather API error: {e}")
+        return {"error": "Could not fetch weather data"}
+```
+</Step>
+
+<Step title="Generate streaming responses">
+
+Stream LLM responses back through Plano:
+
+```python weather_agent.py
+async def generate_response(messages: list, weather_data: dict):
+    """Generate streaming response using weather data."""
+    
+    # Build context with weather information
+    system_message = {
+        "role": "system",
+        "content": f"""You are a helpful weather assistant.
+        
+        Current weather data:
+        Location: {weather_data.get('location', 'Unknown')}
+        Temperature: {weather_data.get('current_temp', 'N/A')}°C
+        Wind Speed: {weather_data.get('wind_speed', 'N/A')} km/h
+        Daily High: {weather_data.get('daily_high', 'N/A')}°C
+        Daily Low: {weather_data.get('daily_low', 'N/A')}°C
+        
+        Provide a natural, conversational response about the weather."""
+    }
+    
+    response_messages = [system_message] + messages
+    
+    try:
+        stream = await openai_client.chat.completions.create(
+            model=WEATHER_MODEL,
+            messages=response_messages,
+            stream=True,
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        async for chunk in stream:
+            if chunk.choices:
+                yield f"data: {chunk.model_dump_json()}\n\n"
+        
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        logger.error(f"Response generation failed: {e}")
+        yield f'data: {{"error": "{str(e)}"}}\n\n'
+```
+</Step>
+
+</Steps>
+
+## Configuring the Agent in Plano
+
+Add your agent to Plano's configuration:
+
+```yaml config.yaml
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://localhost:10510
+
+model_providers:
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+
+listeners:
+  - type: agent
+    name: assistant
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          WeatherAgent provides real-time weather information and forecasts 
+          for any city worldwide using the Open-Meteo API.
+          
+          Capabilities:
+          * Get current weather conditions for any city
+          * Provide temperature, wind speed, and daily forecasts
+          * Understand conversation context to resolve location references
+          * Handles questions like "What's the weather in [city]?"
+
+tracing:
+  random_sampling: 100
+```
+
+<Tip>
+Agent descriptions are critical - they're used by Plano-Orchestrator to make routing decisions. Be specific about capabilities and example queries.
+</Tip>
+
+## Testing Your Agent
+
+<Tabs>
+  <Tab title="Start the agent">
+    ```bash
+    python weather_agent.py
+    ```
+  </Tab>
+  
+  <Tab title="Start Plano">
+    ```bash
+    planoai up config.yaml
+    ```
+  </Tab>
+  
+  <Tab title="Send a request">
+    ```bash
+    curl http://localhost:8001/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-5.2",
+        "messages": [
+          {"role": "user", "content": "What's the weather in Tokyo?"}
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## Multi-Agent Orchestration
+
+Plano automatically routes requests across multiple agents based on intent.
+
+### Travel Booking Example
+
+Combine weather and flight agents:
+
+```yaml config.yaml
+agents:
+  - id: weather_agent
+    url: http://localhost:10510
+  - id: flight_agent
+    url: http://localhost:10520
+
+listeners:
+  - type: agent
+    name: travel_assistant
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          Gets real-time weather and forecasts for any city worldwide.
+          Handles: "What's the weather in Paris?", "Will it rain?"
+      
+      - id: flight_agent
+        description: |
+          Searches flights between airports with live status.
+          Handles: "Flights from NYC to LA", "Show me flights to Seattle"
+```
+
+Now users can ask complex multi-intent questions:
+
+```bash
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": "I want to travel from NYC to Paris next week. What is the weather like there, and can you find me some flights?"
+    }]
+  }'
+```
+
+Plano routes to **both agents** automatically:
+1. Weather agent provides Paris forecast
+2. Flight agent searches NYC → Paris flights
+3. Responses are combined in a single conversation
+
+## Adding OpenTelemetry Tracing
+
+Instrument your agent with OTEL for distributed tracing:
+
+```python weather_agent.py
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.propagate import extract, inject
+
+# Set up tracer
+resource = Resource(attributes={"service.name": "weather-agent"})
+tracer_provider = TracerProvider(resource=resource)
+otlp_exporter = OTLPSpanExporter(
+    endpoint="http://localhost:4317",
+    insecure=True
+)
+span_processor = BatchSpanProcessor(otlp_exporter)
+tracer_provider.add_span_processor(span_processor)
+trace.set_tracer_provider(tracer_provider)
+
+tracer = trace.get_tracer(__name__)
+
+@app.post("/v1/chat/completions")
+async def chat(request: Request):
+    # Extract trace context from Plano
+    context = extract(dict(request.headers))
+    
+    with tracer.start_as_current_span(
+        "weather_agent.chat",
+        context=context
+    ) as span:
+        body = await request.json()
+        messages = body.get("messages", [])
+        
+        # Add span attributes
+        span.set_attribute("agent.id", "weather_agent")
+        span.set_attribute("message.count", len(messages))
+        
+        # ... rest of implementation
+```
+
+<Note>
+Plano automatically propagates trace context via the `traceparent` header. Your agents just need to extract it.
+</Note>
+
+## Agent Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use conversation context effectively">
+    Include full conversation history in extraction prompts to handle follow-up questions:
+    
+    ```python
+    # Good: Includes context for "What about Dubai?"
+    extraction_messages = [
+        {"role": "system", "content": instructions},
+        *messages  # Full conversation
+    ]
+    ```
+  </Accordion>
+  
+  <Accordion title="Route all LLM calls through Plano">
+    Always use Plano's gateway for consistent routing and observability:
+    
+    ```python
+    # Good
+    client = AsyncOpenAI(
+        base_url="http://localhost:12000/v1",
+        api_key="EMPTY"
+    )
+    
+    # Avoid: Direct provider calls
+    # client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle errors gracefully">
+    Provide fallback values and clear error messages:
+    
+    ```python
+    try:
+        location = extract_location(messages)
+    except Exception as e:
+        logger.error(f"Extraction failed: {e}")
+        location = "New York"  # Sensible default
+    ```
+  </Accordion>
+  
+  <Accordion title="Use appropriate models for tasks">
+    - **Extraction**: Small, fast models (`gpt-4o-mini`, `claude-haiku`)
+    - **Generation**: Larger, more capable models (`gpt-5.2`, `claude-sonnet`)
+    
+    ```python
+    LOCATION_MODEL = "openai/gpt-4o-mini"  # Fast extraction
+    WEATHER_MODEL = "openai/gpt-5.2"       # Quality responses
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Dockerizing Your Agent
+
+Package your agent for production:
+
+```dockerfile Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY weather_agent.py .
+
+EXPOSE 10510
+
+CMD ["python", "weather_agent.py"]
+```
+
+Add to Docker Compose:
+
+```yaml docker-compose.yaml
+services:
+  plano:
+    image: katanemo/plano:latest
+    ports:
+      - "8001:8001"
+      - "12000:12000"
+    volumes:
+      - ./config.yaml:/app/plano_config.yaml
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+  
+  weather-agent:
+    build: .
+    ports:
+      - "10510:10510"
+    environment:
+      - LLM_GATEWAY_ENDPOINT=http://host.docker.internal:12000/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+## Example Agents from Demos
+
+Explore complete agent implementations:
+
+<CardGroup cols={2}>
+  <Card title="Travel Agents" icon="plane" href="https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/travel_agents">
+    Weather and flight agents with multi-turn conversations
+  </Card>
+  
+  <Card title="RAG Agent" icon="book" href="https://github.com/katanemo/plano/tree/main/demos/filter_chains/http_filter">
+    Agent with filter chains for context enrichment
+  </Card>
+  
+  <Card title="Multi-Framework" icon="layer-group" href="https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/multi_agent_crewai_langchain">
+    Combining CrewAI and LangChain agents
+  </Card>
+  
+  <Card title="Currency Exchange" icon="dollar-sign" href="https://github.com/katanemo/plano/tree/main/demos/advanced/currency_exchange">
+    Function calling with external REST APIs
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Add Filter Chains" icon="filter" href="/guides/guardrails">
+  Learn how to add input validation, query rewriting, and context enrichment to your agents
+</Card>

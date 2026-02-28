@@ -1,0 +1,406 @@
+---
+title: Observability
+description: Comprehensive visibility into agent behavior with distributed tracing, behavioral signals, and OpenTelemetry integration
+---
+
+Plano provides production-grade observability for agentic applications through distributed tracing, behavioral signals, and OpenTelemetry integration. Get real-time insights into agent performance, conversation quality, and system health without manual instrumentation.
+
+## Agentic Signals
+
+Agentic Signals are behavioral and execution quality indicators that act as early warning signs of agent performance—highlighting both brilliant successes and severe failures. These signals are computed directly from conversation traces without requiring manual labeling or domain expertise.
+
+<Note>
+Signals don't label quality outright but dramatically shrink the search space, pointing to sessions most likely to be broken or brilliant. They provide fast, economical proxies that help you prioritize which traces deserve review.
+</Note>
+
+### The Problem: Knowing What's "Good"
+
+One of the hardest parts of building agents is measuring how well they perform in the real world:
+
+<CardGroup cols={2}>
+  <Card title="Offline Testing Limitations" icon="flask">
+    Relies on hand-picked examples and happy-path scenarios, missing the messy diversity of real usage. Slow, manual, incomplete feedback loop.
+  </Card>
+  <Card title="Production Debugging Challenges" icon="bug">
+    Floods developers with traces and logs but provides little guidance on which interactions actually matter. Finding failures requires painstaking manual review.
+  </Card>
+</CardGroup>
+
+**You can't:**
+- Score every response with an LLM-as-judge (too expensive, too slow)
+- Manually review every trace (doesn't scale)
+
+**You need:**
+- Behavioral signals—fast indicators that point to sessions most likely to need attention
+
+## Core Signal Types
+
+Plano tracks six categories of behavioral indicators:
+
+<Tabs>
+  <Tab title="Turn Count & Efficiency">
+    **What it measures:** Number of user-assistant exchanges and conversation efficiency.
+
+    **Why it matters:** Long conversations often indicate unclear intent resolution, confusion, or inefficiency. Very short conversations can correlate with crisp resolution.
+
+    **Key metrics:**
+    - Total turn count
+    - Warning thresholds (concerning: greater than 7 turns, excessive: greater than 12 turns)
+    - Efficiency score (0.0–1.0)
+
+    **Efficiency scoring:**
+    ```
+    efficiency = 1 / (1 + 0.3 * (turns - baseline))
+    ```
+    Baseline expectation is approximately 5 turns (tunable). Efficiency stays at 1.0 up to baseline, then declines with an inverse penalty.
+  </Tab>
+  <Tab title="Follow-Up & Repair">
+    **What it measures:** How often users clarify, correct, or rephrase requests (a user signal tracking query reformulation behavior).
+
+    **Why it matters:** High repair frequency is a proxy for misunderstanding or intent drift. When users repeatedly rephrase, the agent is failing to grasp or act on intent.
+
+    **Key metrics:**
+    - Repair count and ratio (repairs / user turns)
+    - Concerning threshold: greater than 30% repair ratio
+    - Detected repair phrases (exact or fuzzy)
+
+    **Common patterns detected:**
+    - Explicit corrections: "I meant", "correction"
+    - Negations: "No, I...", "that's not"
+    - Rephrasing: "let me rephrase", "to clarify"
+    - Mistake acknowledgment: "my mistake", "I was wrong"
+  </Tab>
+  <Tab title="User Frustration">
+    **What it measures:** Observable frustration indicators and emotional escalation.
+
+    **Why it matters:** Catching frustration early enables intervention before users abandon or escalate.
+
+    **Detection patterns:**
+    - **Complaints**: "this doesn't work", "not helpful", "waste of time"
+    - **Confusion**: "I don't understand", "makes no sense", "I'm confused"
+    - **Tone markers**: ALL CAPS (10+ chars, 80%+ uppercase), excessive punctuation (3+ exclamation/question marks)
+    - **Profanity**: Token-based detection
+
+    **Severity levels:**
+    - None (0): no indicators
+    - Mild (1): 1–2 indicators
+    - Moderate (2): 3–4 indicators
+    - Severe (3): 5+ indicators
+  </Tab>
+  <Tab title="Repetition & Looping">
+    **What it measures:** Assistant repetition and degenerative loops (an assistant signal).
+
+    **Why it matters:** Often indicates missing state tracking, broken tool integration, prompt issues, or the agent ignoring user corrections.
+
+    **Detection method:**
+    - Compare assistant messages using bigram Jaccard similarity
+    - Classify: Exact (similarity ≥ 0.85), Near-duplicate (similarity ≥ 0.50)
+    - Looping flagged when repetition instances exceed 2 in a session
+
+    **Severity levels:**
+    - None (0): 0 instances
+    - Mild (1): 1–2 instances
+    - Moderate (2): 3–4 instances
+    - Severe (3): 5+ instances
+  </Tab>
+  <Tab title="Positive Feedback">
+    **What it measures:** User expressions of satisfaction, gratitude, and success.
+
+    **Why it matters:** Strong positive signals identify exemplar traces for prompt engineering and evaluation.
+
+    **Detection patterns:**
+    - Gratitude: "thank you", "appreciate it"
+    - Satisfaction: "that's great", "awesome", "love it"
+    - Success confirmation: "got it", "that worked", "perfect"
+
+    **Confidence scoring:**
+    - 1 indicator: 0.6
+    - 2 indicators: 0.8
+    - 3+ indicators: 0.95
+  </Tab>
+  <Tab title="Escalation Requests">
+    **What it measures:** Requests for human help/support or threats to quit.
+
+    **Why it matters:** Escalation is a strong signal that the agent failed to resolve the interaction.
+
+    **Detection patterns:**
+    - Human requests: "speak to a human", "real person", "live agent"
+    - Support: "contact support", "customer service", "help desk"
+    - Quit threats: "I'm done", "forget it", "I give up"
+  </Tab>
+</Tabs>
+
+## Overall Quality Assessment
+
+Signals are aggregated into an overall interaction quality on a 5-point scale:
+
+<Steps>
+  <Step title="Excellent">
+    Strong positive signals, efficient resolution, low friction. These are your exemplar traces.
+  </Step>
+  <Step title="Good">
+    Mostly positive with minor clarifications; some back-and-forth but successful.
+  </Step>
+  <Step title="Neutral">
+    Mixed signals; neither clearly good nor bad. Normal conversations.
+  </Step>
+  <Step title="Poor">
+    Concerning negative patterns—high friction, multiple repairs, moderate frustration. High abandonment risk.
+  </Step>
+  <Step title="Severe">
+    Critical issues—escalation requested, severe frustration, severe looping, or excessive turns (greater than 12). Requires immediate attention.
+  </Step>
+</Steps>
+
+## OpenTelemetry Integration
+
+<Info>
+Signals are computed automatically by the gateway and emitted as **OpenTelemetry trace attributes** to your existing observability stack (Jaeger, Honeycomb, Grafana Tempo, etc.). No additional libraries or instrumentation required.
+</Info>
+
+### Trace Attributes
+
+Each conversation trace is enriched with signal attributes:
+
+```yaml Example Span Attributes
+# Span name: "POST /v1/chat/completions gpt-4 🚩"
+signals.quality: "Severe"
+signals.turn_count: 15
+signals.efficiency_score: 0.234
+signals.repair.count: 4
+signals.repair.ratio: 0.571
+signals.frustration.severity: 3
+signals.frustration.count: 5
+signals.escalation.requested: "true"
+signals.repetition.count: 4
+```
+
+### Visual Flag Marker
+
+<Warning>
+When concerning signals are detected (frustration, looping, escalation, or poor/severe quality), the flag marker **🚩** is automatically appended to the span's operation name, making problematic traces easy to spot.
+</Warning>
+
+### Querying in Your Observability Platform
+
+Example queries for common investigations:
+
+<CodeGroup>
+```sql Find Severe Interactions
+-- All severe interactions
+signals.quality = "Severe"
+
+-- Severe with high repair rate
+signals.quality = "Severe" AND signals.repair.ratio > 0.3
+
+-- Severe looping issues
+signals.quality = "Severe" AND signals.repetition.count >= 3
+```
+
+```sql Find Performance Issues
+-- Long conversations
+signals.turn_count > 10
+
+-- Inefficient interactions
+signals.efficiency_score < 0.5
+
+-- High repair rates
+signals.repair.ratio > 0.3
+```
+
+```sql Find Frustrated Users
+-- Moderate to severe frustration
+signals.frustration.severity >= 2
+
+-- Escalation requests
+signals.escalation.requested = "true"
+
+-- Frustrated users giving up
+signals.frustration.severity >= 2 AND signals.escalation.requested = "true"
+```
+
+```sql Find Exemplars
+-- Positive interactions
+signals.positive_feedback.count >= 2
+
+-- Efficient and positive
+signals.efficiency_score >= 0.8 AND signals.positive_feedback.count >= 1
+
+-- Excellent quality
+signals.quality = "Excellent"
+```
+</CodeGroup>
+
+## Configuration
+
+Enable tracing in your Plano configuration:
+
+```yaml config.yaml
+version: v0.3.0
+
+listeners:
+  - type: agent
+    name: my_agent
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: my_agent
+        description: My agent description
+
+tracing:
+  # Sample 100% of requests (adjust for production)
+  random_sampling: 100
+  
+  # Capture custom header attributes in spans
+  span_attributes:
+    header_prefixes:
+      - x-request-
+      - x-user-
+  
+  # Enable internal tracing for debugging
+  trace_arch_internal: true
+```
+
+## Building Dashboards
+
+Use signal attributes to build monitoring dashboards:
+
+<CardGroup cols={2}>
+  <Card title="Quality Distribution" icon="chart-pie">
+    Count of traces by `signals.quality` to see overall conversation health
+  </Card>
+  <Card title="P95 Turn Count" icon="chart-line">
+    95th percentile of `signals.turn_count` to track conversation efficiency trends
+  </Card>
+  <Card title="Average Efficiency" icon="gauge">
+    Mean of `signals.efficiency_score` to monitor agent performance over time
+  </Card>
+  <Card title="High Repair Rate" icon="wrench">
+    Percentage where `signals.repair.ratio > 0.3` indicating intent understanding issues
+  </Card>
+  <Card title="Frustration Rate" icon="face-frown">
+    Percentage where `signals.frustration.severity >= 2` showing user satisfaction
+  </Card>
+  <Card title="Escalation Rate" icon="phone">
+    Percentage where `signals.escalation.requested = true` tracking failure to resolve
+  </Card>
+  <Card title="Looping Rate" icon="rotate">
+    Percentage where `signals.repetition.count >= 3` indicating stuck agents
+  </Card>
+  <Card title="Positive Feedback" icon="thumbs-up">
+    Percentage where `signals.positive_feedback.count >= 1` tracking success
+  </Card>
+</CardGroup>
+
+## Creating Alerts
+
+Set up alerts based on signal thresholds:
+
+<Steps>
+  <Step title="Severe Interaction Alerts">
+    Alert when severe interaction count exceeds threshold in 1-hour window
+    ```
+    COUNT(signals.quality = "Severe") > 10 in last 1h
+    ```
+  </Step>
+  <Step title="Frustration Spike Alerts">
+    Alert on sudden spike in frustration rate (greater than 2x baseline)
+    ```
+    signals.frustration.severity >= 2 rate > 2x moving average
+    ```
+  </Step>
+  <Step title="Escalation Alerts">
+    Alert when escalation rate exceeds 5% of total conversations
+    ```
+    (COUNT(signals.escalation.requested = "true") / COUNT(*)) > 0.05
+    ```
+  </Step>
+  <Step title="Efficiency Degradation">
+    Alert on degraded efficiency (P95 turn count increases greater than 50%)
+    ```
+    P95(signals.turn_count) > 1.5x baseline
+    ```
+  </Step>
+</Steps>
+
+## Sampling and Prioritization
+
+In production, trace data is overwhelming. Signals provide a lightweight first layer of analysis:
+
+<Steps>
+  <Step title="Capture Signals">
+    Gateway captures conversation messages and computes signals automatically
+  </Step>
+  <Step title="Emit to OTEL">
+    Signal attributes are emitted to OTEL spans automatically
+  </Step>
+  <Step title="Index Attributes">
+    Your observability platform ingests and indexes the attributes
+  </Step>
+  <Step title="Query Outliers">
+    Query/filter by signal attributes to surface outliers (poor/severe and exemplars)
+  </Step>
+  <Step title="Review Traces">
+    Review high-information traces to identify improvement opportunities
+  </Step>
+  <Step title="Update & Redeploy">
+    Update prompts, routing, or policies based on findings
+  </Step>
+  <Step title="Validate">
+    Monitor signal metrics to validate improvements
+  </Step>
+</Steps>
+
+## Best Practices
+
+<Tip>
+Start simple and expand your monitoring over time:
+
+**Immediate Actions:**
+- Alert or page on **Severe** sessions (or on spikes in Severe rate)
+- Review **Poor** sessions within 24 hours
+- Sample **Excellent** sessions as exemplars for prompt engineering
+
+**Combine Signals:**
+- **Looping**: repetition severity ≥ 2 + excessive turns
+- **User giving up**: frustration severity ≥ 2 + escalation requested
+- **Misunderstood intent**: repair ratio greater than 30% + excessive turns
+- **Working well**: positive feedback + high efficiency + no frustration
+</Tip>
+
+## Limitations and Considerations
+
+<Warning>
+Signals don't capture:
+- Task completion / real outcomes
+- Factual or domain correctness
+- Silent abandonment (user leaves without expressing frustration)
+- Non-English nuance (pattern libraries are English-oriented)
+</Warning>
+
+**Mitigation strategies:**
+- Periodically sample flagged sessions and measure false positives/negatives
+- Tune baselines per use case and user population
+- Add domain-specific phrase libraries where needed
+- Combine signals with non-text metrics (tool failures, disconnects, latency)
+
+<Info>
+Behavioral signals complement—but do not replace—domain-specific response quality evaluation. Use signals to prioritize which traces to inspect, then apply domain expertise and outcome checks to diagnose root causes.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent Orchestration" icon="robot" href="/features/agent-orchestration">
+    Learn how orchestration decisions appear in traces
+  </Card>
+  <Card title="Filter Chains" icon="filter" href="/features/filter-chains">
+    See how filter execution is captured in distributed traces
+  </Card>
+  <Card title="State Management" icon="database" href="/features/state-management">
+    Understand how conversation state affects signal computation
+  </Card>
+  <Card title="Configuration Reference" icon="book" href="/configuration/tracing">
+    Complete tracing and observability configuration reference
+  </Card>
+</CardGroup>

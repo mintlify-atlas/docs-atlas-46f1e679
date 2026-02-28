@@ -1,0 +1,239 @@
+---
+title: Agent Orchestration
+description: Build and scale multi-agent systems with intelligent routing and orchestration powered by Plano-Orchestrator
+---
+
+Agents are autonomous systems that handle wide-ranging, open-ended tasks by calling models in a loop until the work is complete. Unlike deterministic prompt targets, agents have access to tools, reason about which actions to take, and adapt their behavior based on intermediate results—making them ideal for complex workflows that require multi-step reasoning, external API calls, and dynamic decision-making.
+
+Plano helps developers build and scale multi-agent systems by managing the orchestration layer—deciding which agent(s) or LLM(s) should handle each request, and in what sequence—while developers focus on implementing agent logic in any language or framework they choose.
+
+## Plano-Orchestrator
+
+**Plano-Orchestrator** is a family of state-of-the-art routing and orchestration models that decide which agent(s) should handle each request, and in what sequence. Built for real-world multi-agent deployments, it analyzes user intent and conversation context to make precise routing and orchestration decisions while remaining efficient enough for low-latency production use across general chat, coding, and long-context multi-turn conversations.
+
+<Note>
+Plano-Orchestrator enables you to:
+- **Scale multi-agent systems**: Route requests across multiple specialized agents without hardcoding routing logic in application code
+- **Improve performance**: Direct requests to the most appropriate agent based on intent, reducing unnecessary handoffs
+- **Enhance debuggability**: Centralized routing decisions are observable through Plano's tracing and logging
+</Note>
+
+## Inner Loop vs. Outer Loop
+
+Plano distinguishes between the **inner loop** (agent implementation logic) and the **outer loop** (orchestration and routing):
+
+<Tabs>
+  <Tab title="Inner Loop">
+    The inner loop is where your agent lives—the business logic that decides which tools to call, how to interpret results, and when the task is complete.
+
+    **You implement this in any language or framework:**
+    - Python agents using LangChain, LlamaIndex, CrewAI, or custom Python code
+    - JavaScript/TypeScript agents using LangChain.js or custom Node.js implementations
+    - Any other AI framework—agents are just HTTP services that Plano can route to
+
+    **Your agent controls:**
+    - Which tools or APIs to call in response to a prompt
+    - How to interpret tool results and decide next steps
+    - When to call the LLM for reasoning or summarization
+    - When the task is complete and what response to return
+  </Tab>
+  <Tab title="Outer Loop">
+    The outer loop is Plano's orchestration layer—it manages the lifecycle of requests across agents and LLMs:
+
+    **Plano handles:**
+    - **Intent analysis**: Analyzes incoming prompts to determine user intent and conversation context
+    - **Routing decisions**: Routes requests to the appropriate agent(s) or LLM(s) based on capabilities
+    - **Sequencing**: Determines whether multiple agents need to collaborate and in what order
+    - **Lifecycle management**: Handles retries, failover, circuit breaking, and load balancing
+
+    **Benefits:**
+    - Add new agents without changing routing logic in existing agents
+    - Run multiple versions or variants of agents for A/B testing or canary deployments
+    - Apply consistent filter chains (guardrails, context enrichment) before requests reach agents
+    - Monitor and debug multi-agent workflows through centralized observability
+  </Tab>
+</Tabs>
+
+## Configuration Example
+
+Here's a real configuration from the travel agents demo showing multi-agent orchestration:
+
+```yaml config.yaml
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+
+model_providers:
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+
+listeners:
+  - type: agent
+    name: travel_booking_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          WeatherAgent provides real-time weather information and forecasts.
+          
+          Capabilities:
+            * Get real-time weather conditions and multi-day forecasts
+            * Provides current temperature, conditions, sunrise/sunset times
+            * Understands conversation context to resolve location references
+            * Handles questions like "What's the weather in [city]?"
+
+      - id: flight_agent
+        description: |
+          FlightAgent provides live flight information between airports.
+          
+          Capabilities:
+            * Get live flight information using FlightAware AeroAPI
+            * Shows real-time flight status, gates, delays, aircraft type
+            * Automatically resolves city names to airport codes
+            * Handles questions like "What flights go from [city] to [city]?"
+
+tracing:
+  random_sampling: 100
+  span_attributes:
+    header_prefixes:
+      - x-acme-
+```
+
+## Making LLM Calls from Agents
+
+<Warning>
+When your agent needs to call an LLM for reasoning, summarization, or completion, you should route those calls through Plano's Model Proxy rather than calling LLM providers directly.
+</Warning>
+
+Routing LLM calls through the Model Proxy gives you:
+
+<CardGroup cols={2}>
+  <Card title="Consistent Responses" icon="check">
+    Normalized response formats across all LLM providers, whether you're using OpenAI, Anthropic, Azure OpenAI, or any OpenAI-compatible provider.
+  </Card>
+  <Card title="Rich Agentic Signals" icon="chart-line">
+    Automatic capture of function calls, tool usage, reasoning steps, and model behavior—surfaced through traces and metrics.
+  </Card>
+  <Card title="Smart Model Routing" icon="route">
+    Leverage model-based, alias-based, or preference-aligned routing to dynamically select the best model for each task.
+  </Card>
+  <Card title="Decoupled Architecture" icon="cube">
+    Your agents remain decoupled from specific providers and benefit from centralized policy enforcement and observability.
+  </Card>
+</CardGroup>
+
+## Multi-Framework Support
+
+Plano works seamlessly with any agent framework because agents are just HTTP services:
+
+<CodeGroup>
+```yaml LangChain Agent
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://langchain-weather-agent:10510
+  - id: flight_agent
+    url: http://crewai-flight-agent:10520
+
+listeners:
+  - type: agent
+    name: travel_booking_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: WeatherAgent for real-time weather data
+      - id: flight_agent
+        description: FlightAgent for live flight information
+```
+
+```yaml CrewAI Agent
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: travel_booking_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: Specialized AI assistant for weather forecasts
+      - id: flight_agent  
+        description: AI-powered tool for flight information
+```
+
+```yaml Custom Agents
+version: v0.3.0
+
+agents:
+  - id: custom_agent_1
+    url: http://my-service:8080
+  - id: custom_agent_2
+    url: http://another-service:9090
+
+listeners:
+  - type: agent
+    name: my_orchestrator
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: custom_agent_1
+        description: Handles data analysis tasks
+      - id: custom_agent_2
+        description: Handles content generation tasks
+```
+</CodeGroup>
+
+## Key Benefits
+
+<Steps>
+  <Step title="Language and Framework Agnostic">
+    Write agents in any language; Plano orchestrates them via HTTP. Use Python, JavaScript, Go, or any language that can serve HTTP.
+  </Step>
+  <Step title="Reduced Complexity">
+    Agents focus on task logic; Plano handles routing, retries, and cross-cutting concerns like observability and guardrails.
+  </Step>
+  <Step title="Better Observability">
+    Centralized tracing shows which agents were called, in what sequence, and why—making debugging multi-agent workflows straightforward.
+  </Step>
+  <Step title="Easier Scaling">
+    Add more agent instances or new agent types without refactoring existing code. Scale horizontally with confidence.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Filter Chains" icon="filter" href="/features/filter-chains">
+    Learn how to add guardrails and context enrichment to your agents
+  </Card>
+  <Card title="Observability" icon="chart-mixed" href="/features/observability">
+    Monitor and debug multi-agent workflows with distributed tracing
+  </Card>
+  <Card title="LLM Routing" icon="route" href="/features/llm-routing">
+    Configure intelligent model routing for your agents
+  </Card>
+  <Card title="State Management" icon="database" href="/features/state-management">
+    Manage conversation state across multi-turn interactions
+  </Card>
+</CardGroup>

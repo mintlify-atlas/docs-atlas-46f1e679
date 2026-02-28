@@ -1,0 +1,724 @@
+---
+title: "Core Concepts"
+description: "Understand the fundamental building blocks of Plano: listeners, agents, model providers, and filter chains."
+---
+
+## Overview
+
+Plano is built around four core primitives that work together to create a production-ready agentic dataplane:
+
+<CardGroup cols={2}>
+  <Card title="Listeners" icon="network-wired">
+    Network entry points that bind traffic to the dataplane
+  </Card>
+  <Card title="Agents" icon="robot">
+    Autonomous systems that handle complex, multi-step workflows
+  </Card>
+  <Card title="Model Providers" icon="cloud">
+    Unified interface to 15+ LLM providers with intelligent routing
+  </Card>
+  <Card title="Filter Chains" icon="filter">
+    Reusable workflow steps for guardrails, RAG, and memory
+  </Card>
+</CardGroup>
+
+## Listeners
+
+**Listeners** are network entry points that bind incoming traffic to Plano's dataplane. They simplify the configuration required to accept connections from clients (edge) and to expose unified egress endpoints for LLM calls from your applications.
+
+<Info>
+Plano builds on Envoy's battle-tested Listener subsystem, hiding most complexity behind sensible defaults while still giving you secure, reliable, and performant connections.
+</Info>
+
+### Types of Listeners
+
+Plano supports three types of listeners, each serving a different purpose:
+
+<Tabs>
+  <Tab title="Agent Listeners">
+    Accept inbound traffic from clients (web, mobile, APIs) and route to agents based on intent.
+    
+    ```yaml
+    listeners:
+      - type: agent
+        name: travel_assistant
+        port: 8001
+        router: plano_orchestrator_v1
+        agents:
+          - id: weather_agent
+            description: "Provides weather forecasts"
+          - id: flight_agent
+            description: "Searches for flights"
+    ```
+    
+    **Use case:** Edge gateway for agentic applications where Plano orchestrates multiple agents.
+  </Tab>
+  
+  <Tab title="Model Listeners">
+    Expose a unified LLM gateway that your applications call for model inference.
+    
+    ```yaml
+    listeners:
+      - type: model
+        name: llm_gateway
+        port: 12000
+    ```
+    
+    **Use case:** Standardize LLM access across your organization with a single endpoint.
+  </Tab>
+  
+  <Tab title="Prompt Target Listeners">
+    Turn natural language prompts into deterministic API calls to backend services.
+    
+    ```yaml
+    listeners:
+      - type: prompt
+        name: api_gateway
+        port: 10000
+    ```
+    
+    **Use case:** Function calling and tool use via prompts (see Prompt Targets guide).
+  </Tab>
+</Tabs>
+
+### Network Topology
+
+Listeners can be configured for both inbound (edge) and outbound (egress) traffic:
+
+<img src="/images/network-topology.png" alt="Network topology showing inbound and outbound traffic flow" />
+
+**Inbound (Agent & Prompt Target)**
+- Clients connect to Plano
+- Plano applies guardrails and routing
+- Requests forwarded to appropriate agents or prompt targets
+- Responses streamed back to clients
+
+**Outbound (Model Proxy)**
+- Your agents/services connect to Plano
+- Plano routes to upstream LLM providers
+- Handles retries, failover, and load balancing
+- Returns normalized responses
+
+<Note>
+Listeners are modular building blocks. Configure only what you need: edge proxying, LLM routing, or both together.
+</Note>
+
+## Agents
+
+Agents are autonomous systems that handle wide-ranging, open-ended tasks by calling models in a loop until the work is complete. Unlike deterministic prompt targets, agents have access to tools, reason about which actions to take, and adapt their behavior based on intermediate results.
+
+### Inner Loop vs. Outer Loop
+
+Plano distinguishes between two types of work in agentic systems:
+
+<Tabs>
+  <Tab title="Inner Loop (Your Code)">
+    The **inner loop** is where your business logic lives—the actual agent implementation:
+    
+    **What you control:**
+    - Which tools or APIs to call in response to a prompt
+    - How to interpret tool results and decide next steps
+    - When to call the LLM for reasoning or summarization
+    - When the task is complete and what response to return
+    
+    **How to implement:**
+    - Python agents (LangChain, LlamaIndex, CrewAI, custom)
+    - JavaScript/TypeScript agents (LangChain.js, custom Node.js)
+    - Any other language or framework
+    
+    **Key requirement:** Expose your agent as an HTTP service implementing the OpenAI chat completions endpoint:
+    
+    ```python
+    @app.post("/v1/chat/completions")
+    async def chat(request: Request):
+        body = await request.json()
+        messages = body.get("messages", [])
+        
+        # Your agent logic here
+        result = await your_agent_logic(messages)
+        
+        # Return OpenAI-compatible response
+        return {"choices": [{"message": {"role": "assistant", "content": result}}]}
+    ```
+  </Tab>
+  
+  <Tab title="Outer Loop (Plano's Job)">
+    The **outer loop** is Plano's orchestration layer—it manages the lifecycle of requests across agents and LLMs:
+    
+    **What Plano handles:**
+    - **Intent analysis**: Analyzes incoming prompts to determine user intent
+    - **Routing decisions**: Routes to appropriate agent(s) based on capabilities
+    - **Sequencing**: Determines if multiple agents need to collaborate and in what order
+    - **Lifecycle management**: Handles retries, failover, circuit breaking, load balancing
+    
+    **Powered by Plano-Orchestrator:**
+    
+    The [Plano-Orchestrator](https://huggingface.co/collections/katanemo/plano-orchestrator) family of models makes intelligent routing decisions:
+    - Analyzes conversation context and user intent
+    - Routes to single agent or coordinates multiple agents
+    - Low-latency (4B parameter model)
+    - Cost-effective compared to using GPT-4 for routing
+    
+    **Configuration:**
+    
+    ```yaml
+    listeners:
+      - type: agent
+        name: my_orchestrator
+        router: plano_orchestrator_v1  # The routing model
+        agents:
+          - id: agent_1
+            description: "Natural language description of capabilities"
+          - id: agent_2  
+            description: "What this agent can do"
+    ```
+  </Tab>
+</Tabs>
+
+### Making LLM Calls from Agents
+
+<Warning>
+**Best Practice:** When your agent needs to call an LLM, route those calls through Plano's Model Proxy rather than calling providers directly.
+</Warning>
+
+Why route through Plano?
+
+<AccordionGroup>
+  <Accordion title="Consistent Responses">
+    Normalized response formats across all LLM providers (OpenAI, Anthropic, Azure, etc.). Your agent code stays the same regardless of which model you use.
+  </Accordion>
+  
+  <Accordion title="Rich Agentic Signals">
+    Automatic capture of function calls, tool usage, reasoning steps, and model behavior. These signals appear in traces and metrics without instrumenting your agent code.
+  </Accordion>
+  
+  <Accordion title="Smart Model Routing">
+    Leverage model-based, alias-based, or preference-aligned routing to dynamically select the best model for each task based on cost, performance, or custom policies.
+  </Accordion>
+  
+  <Accordion title="Decoupling">
+    Your agents stay decoupled from specific providers. Swap models, add fallbacks, or change providers without modifying agent code.
+  </Accordion>
+</AccordionGroup>
+
+**Example:**
+
+```python
+from openai import AsyncOpenAI
+
+# Point to Plano's model proxy, not OpenAI directly
+llm = AsyncOpenAI(
+    base_url="http://host.docker.internal:12001/v1",
+    api_key="EMPTY"  # Plano manages keys
+)
+
+# Make LLM calls as usual
+response = await llm.chat.completions.create(
+    model="openai/gpt-4o",
+    messages=[{"role": "user", "content": "Analyze this data..."}],
+    stream=True
+)
+```
+
+### Benefits of Plano's Agent Orchestration
+
+<CardGroup cols={2}>
+  <Card title="Language Agnostic" icon="code">
+    Write agents in any language—Plano orchestrates them via HTTP
+  </Card>
+  <Card title="Reduced Complexity" icon="minimize">
+    Agents focus on task logic; Plano handles routing and retries
+  </Card>
+  <Card title="Better Observability" icon="chart-line">
+    Centralized tracing shows which agents were called and why
+  </Card>
+  <Card title="Easier Scaling" icon="arrows-up-to-line">
+    Add agents without refactoring existing code
+  </Card>
+</CardGroup>
+
+## Model Providers
+
+**Model Providers** are a top-level primitive in Plano for centralizing how you define, secure, observe, and manage LLM usage across your organization.
+
+<Info>
+Plano builds on Envoy's reliable [cluster subsystem](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/cluster_manager) to manage egress traffic to models, including intelligent routing, retry and failover mechanisms for high availability.
+</Info>
+
+### Supported Providers
+
+Plano integrates with **15+ LLM providers** through a unified interface:
+
+<Tabs>
+  <Tab title="First-Class Providers">
+    Native integrations with full support:
+    
+    - OpenAI (GPT-4o, GPT-4, GPT-3.5)
+    - Anthropic (Claude 3.5 Sonnet, Claude 3 Opus)
+    - DeepSeek
+    - Mistral AI
+    - Groq
+    - Google Gemini
+    - Together AI
+    - xAI (Grok)
+    - Azure OpenAI
+    - AWS Bedrock
+    - Ollama (local models)
+  </Tab>
+  
+  <Tab title="OpenAI-Compatible">
+    Any provider implementing the OpenAI Chat Completions API:
+    
+    - vLLM deployments
+    - LM Studio
+    - LocalAI
+    - Custom model endpoints
+    
+    Just configure with the OpenAI-compatible endpoint:
+    
+    ```yaml
+    model_providers:
+      - model: custom/my-model
+        endpoint: https://my-custom-endpoint.com/v1
+        access_key: $MY_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Wildcard Configuration">
+    Automatically configure all models from a provider:
+    
+    ```yaml
+    model_providers:
+      - model: openai/*
+        access_key: $OPENAI_API_KEY
+      - model: anthropic/*
+        access_key: $ANTHROPIC_API_KEY
+    ```
+    
+    Now you can use any model from these providers without additional config.
+  </Tab>
+</Tabs>
+
+### Three Routing Strategies
+
+Plano offers three powerful ways to route requests to models:
+
+<Steps>
+  <Step title="Model-Based Routing">
+    Direct routing to specific models using `provider/model` naming:
+    
+    ```python
+    response = client.chat.completions.create(
+        model="anthropic/claude-3-5-sonnet",
+        messages=[...]
+    )
+    ```
+    
+    **Use case:** When you know exactly which model you need.
+  </Step>
+  
+  <Step title="Alias-Based Routing">
+    Semantic routing using custom aliases:
+    
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        aliases:
+          - prod.chat.v1
+          - fast-reasoning
+      
+      - model: anthropic/claude-3-5-sonnet
+        access_key: $ANTHROPIC_API_KEY  
+        aliases:
+          - prod.chat.v2
+          - deep-reasoning
+    ```
+    
+    Then use aliases in your code:
+    
+    ```python
+    response = client.chat.completions.create(
+        model="prod.chat.v1",  # Routes to gpt-4o
+        messages=[...]
+    )
+    ```
+    
+    **Use case:** Environment-specific models, A/B testing, semantic versioning.
+  </Step>
+  
+  <Step title="Preference-Aligned Routing">
+    Intelligent routing using the [Plano-Router](https://huggingface.co/katanemo/Plano-Router-1.5B) model:
+    
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        preferences:
+          - speed
+          - cost-effective
+      
+      - model: anthropic/claude-3-5-sonnet
+        access_key: $ANTHROPIC_API_KEY
+        preferences:
+          - reasoning
+          - accuracy
+    ```
+    
+    Plano-Router analyzes the prompt and automatically selects the best model based on preferences.
+    
+    **Use case:** Optimize cost and performance automatically without hardcoding model selection.
+  </Step>
+</Steps>
+
+### Configuration Example
+
+```yaml
+version: v0.3.0
+
+model_providers:
+  # OpenAI models
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true  # Fallback when model not found
+    aliases:
+      - prod.chat.v1
+      - fast-model
+  
+  # Anthropic models  
+  - model: anthropic/claude-3-5-sonnet
+    access_key: $ANTHROPIC_API_KEY
+    aliases:
+      - prod.reasoning.v1
+  
+  # Local Ollama models
+  - model: ollama/llama3.1
+    endpoint: http://localhost:11434
+  
+  # All OpenAI models (wildcard)
+  - model: openai/*
+    access_key: $OPENAI_API_KEY
+
+listeners:
+  - type: model
+    name: llm_gateway
+    port: 12000
+```
+
+### Benefits
+
+<CardGroup cols={2}>
+  <Card title="Provider Flexibility" icon="shuffle">
+    Switch providers without changing client code
+  </Card>
+  <Card title="Cost Optimization" icon="dollar-sign">
+    Route to cost-effective models based on task complexity
+  </Card>
+  <Card title="Performance Optimization" icon="gauge-high">
+    Use fast models for simple tasks, powerful models for complex reasoning
+  </Card>
+  <Card title="Future-Proof" icon="shield-check">
+    Easy to add new providers and upgrade models
+  </Card>
+</CardGroup>
+
+## Filter Chains
+
+**Filter chains** are Plano's way of capturing reusable workflow steps in the dataplane, without duplicating logic across agents. A filter chain is an ordered list of mutations that a request flows through before reaching its destination.
+
+<Info>
+Think of filters as middleware for your agentic applications. Each filter is a network-addressable service that can inspect, mutate, or short-circuit requests.
+</Info>
+
+### What Filters Can Do
+
+Each filter in the chain can:
+
+1. **Inspect** the incoming prompt, metadata, and conversation state
+2. **Mutate or enrich** the request (rewrite queries, build context, add memory)
+3. **Short-circuit** the flow and return early (block unsafe requests, enforce policies)
+4. **Emit traces** for debugging and continuous improvement
+
+### Common Use Cases
+
+<AccordionGroup>
+  <Accordion title="Guardrails and Compliance">
+    Enforce content policies, detect jailbreak attempts, strip sensitive data, and block unsafe requests before they reach agents.
+    
+    **Example:**
+    - PII detection and masking
+    - Prompt injection detection
+    - Content moderation
+    - Rate limiting per user
+  </Accordion>
+  
+  <Accordion title="RAG and Memory">
+    Rewrite queries for retrieval, normalize entities, assemble RAG context, and pull in conversation history or user profiles.
+    
+    **Example:**
+    - Query rewriting for better retrieval
+    - Vector search and context injection
+    - Conversation memory management
+    - User preference loading
+  </Accordion>
+  
+  <Accordion title="Cross-Cutting Observability">
+    Inject correlation IDs, sample traces, log enriched metadata at consistent points in the request path.
+    
+    **Example:**
+    - Request ID propagation
+    - Custom span attributes
+    - Performance monitoring
+    - Audit logging
+  </Accordion>
+</AccordionGroup>
+
+### Configuration Example
+
+```yaml
+version: v0.3.0
+
+# Define reusable filters
+filters:
+  - id: query_rewriter
+    type: mcp
+    url: http://my-filter-service:8080
+    tool: rewrite_query
+  
+  - id: context_builder
+    type: mcp
+    url: http://my-filter-service:8080
+    tool: build_context
+  
+  - id: pii_detector
+    type: http
+    url: http://compliance-service:9000/check
+
+agents:
+  - id: rag_agent
+    url: http://localhost:10600
+
+listeners:
+  - type: agent
+    name: rag_orchestrator
+    port: 8001
+    router: plano_orchestrator_v1
+    
+    # Attach filter chain to listener
+    filter_chain:
+      - query_rewriter
+      - pii_detector
+      - context_builder
+    
+    agents:
+      - id: rag_agent
+        description: "Answers questions using document retrieval"
+```
+
+**Request flow:**
+1. Request arrives at port 8001
+2. Plano executes `query_rewriter` → `pii_detector` → `context_builder` in order
+3. If all filters succeed, request reaches `rag_agent`
+4. Response flows back through the chain
+
+### Filter Programming Model
+
+Filters are simple HTTP services. Plano supports two protocols:
+
+<Tabs>
+  <Tab title="Model Context Protocol (MCP)">
+    The [Model Context Protocol](https://modelcontextprotocol.io/) is a standard for building context-aware AI tools.
+    
+    ```yaml
+    filters:
+      - id: my_filter
+        type: mcp  # Default
+        url: http://my-service:8080
+        tool: my_tool_name
+        transport: streamable-http  # Default
+    ```
+    
+    Your filter exposes MCP tools that Plano invokes automatically.
+  </Tab>
+  
+  <Tab title="Plain HTTP">
+    Simple HTTP endpoints for custom filters:
+    
+    ```yaml
+    filters:
+      - id: my_filter
+        type: http
+        url: http://my-service:8080/process
+    ```
+    
+    Plano POSTs the request to your endpoint and expects a response.
+  </Tab>
+</Tabs>
+
+### HTTP Status Semantics
+
+Filters communicate outcomes via HTTP status codes:
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| **200** | Success | Continue to next filter or agent |
+| **4xx** | User Error | Terminate request, return error to user (e.g., policy violation) |
+| **5xx** | Fatal Error | Terminate request, log error for investigation |
+
+<Note>
+4xx responses are **expected** for policy enforcement (content moderation, rate limits). 5xx responses indicate unexpected failures.
+</Note>
+
+### Benefits
+
+<CardGroup cols={2}>
+  <Card title="Reusability" icon="recycle">
+    Define once, attach to many agents and listeners
+  </Card>
+  <Card title="Consistency" icon="equals">
+    Same policies across all agents without code duplication
+  </Card>
+  <Card title="Composability" icon="layer-group">
+    Mix and match filters to create complex workflows
+  </Card>
+  <Card title="Evolvability" icon="arrows-rotate">
+    Add, remove, or reorder filters without changing agent code
+  </Card>
+</CardGroup>
+
+## Observability
+
+Plano provides **zero-code observability** out of the box using industry-standard tools.
+
+### Agentic Signals™
+
+Plano automatically captures rich signals across every agent interaction:
+
+- **Function calls and tool usage**: What tools were invoked and with what parameters
+- **Model behavior**: Token usage, latency metrics, reasoning steps
+- **Routing decisions**: Which agents were called and why
+- **Error patterns**: Failures, retries, fallbacks
+
+<Info>
+All signals are captured without instrumenting your agent code. Plano propagates trace context using W3C Trace Context standard via the `traceparent` header.
+</Info>
+
+### OpenTelemetry Integration
+
+Plano emits OpenTelemetry-compatible traces, metrics, and logs:
+
+```yaml
+tracing:
+  random_sampling: 100  # Sample rate (0-100)
+  span_attributes:
+    header_prefixes:
+      - x-custom-  # Include custom headers in spans
+```
+
+Export traces to your preferred backend:
+- Jaeger
+- Zipkin  
+- Grafana Tempo
+- DataDog
+- New Relic
+- Honeycomb
+
+### CLI Commands
+
+```bash
+# Stream access and debug logs
+planoai logs
+
+# OTEL trace collection and analysis  
+planoai trace
+```
+
+### Key Metrics
+
+Plano tracks:
+- **Latency**: Time to first token (TTFT), time per output token (TPOT), total latency
+- **Token usage**: Input/output tokens per request, per agent, per model
+- **Error rates**: By provider, by agent, by status code
+- **Request volume**: Throughput, concurrency, queue depth
+
+## Putting It All Together
+
+Here's how the four primitives work together in a production deployment:
+
+```yaml
+version: v0.3.0
+
+# Define filters (reusable workflow steps)
+filters:
+  - id: guardrail
+    type: http
+    url: http://compliance:9000/check
+  - id: memory
+    type: mcp
+    url: http://memory-service:8080
+
+# Define agents (your business logic)
+agents:
+  - id: support_agent
+    url: http://support:10510
+  - id: sales_agent
+    url: http://sales:10520
+
+# Define model providers (LLM access)
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    aliases: [prod.chat.v1]
+  - model: anthropic/claude-3-5-sonnet
+    access_key: $ANTHROPIC_API_KEY
+    aliases: [prod.reasoning.v1]
+
+# Define listeners (network entry points)
+listeners:
+  # Edge gateway for agents
+  - type: agent
+    name: customer_assistant
+    port: 8001
+    router: plano_orchestrator_v1
+    filter_chain: [guardrail, memory]
+    agents:
+      - id: support_agent
+        description: "Handles technical support questions"
+      - id: sales_agent
+        description: "Answers product and pricing questions"
+  
+  # LLM gateway for agents to call
+  - type: model
+    name: llm_gateway
+    port: 12000
+
+# Observability
+tracing:
+  random_sampling: 100
+```
+
+**Request flow:**
+1. Client hits `http://localhost:8001` (agent listener)
+2. Request flows through `guardrail` → `memory` filters
+3. Plano-Orchestrator analyzes intent and routes to appropriate agent
+4. Agent calls LLM via `http://localhost:12000` (model listener)
+5. Plano routes to appropriate model provider
+6. Response flows back through the stack
+7. All interactions automatically traced with OpenTelemetry
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first agentic application
+  </Card>
+  <Card title="Agent Orchestration" icon="sitemap" href="/guides/orchestration">
+    Deep dive into multi-agent systems
+  </Card>
+  <Card title="LLM Routing" icon="arrows-rotate" href="/guides/llm-router">
+    Master model selection strategies
+  </Card>
+  <Card title="Filter Chains" icon="filter" href="/guides/filter-chains">
+    Build guardrails and RAG pipelines
+  </Card>
+</CardGroup>

@@ -1,0 +1,388 @@
+---
+title: planoai build
+description: Build Plano Docker image from source code
+---
+
+The `planoai build` command builds the Plano Docker image from source. Use this for local development or when you need custom modifications.
+
+## Basic Usage
+
+```bash
+planoai build
+```
+
+This command must be run from within the Plano repository.
+
+## Command Signature
+
+```bash
+planoai build
+```
+
+No arguments or options are required.
+
+## Requirements
+
+<Note>
+**Prerequisites:**
+- You must be inside the Plano git repository
+- Docker must be installed and running
+- Sufficient disk space (~2GB for build layers)
+- Network access to pull base images
+</Note>
+
+## What It Does
+
+<Steps>
+  <Step title="Find repository root">
+    Plano searches upward from your current directory to find the repository root (containing `.git/`).
+    
+    You can run `planoai build` from any subdirectory:
+    ```bash
+    cd crates/llm_gateway
+    planoai build  # Works!
+    ```
+  </Step>
+  
+  <Step title="Locate Dockerfile">
+    Validates that `Dockerfile` exists at the repository root.
+  </Step>
+  
+  <Step title="Build Docker image">
+    Executes `docker build` with the correct context:
+    
+    ```bash
+    docker build \
+      -f <repo>/Dockerfile \
+      -t katanemo/plano:0.4.9 \
+      --add-host=host.docker.internal:host-gateway \
+      <repo>
+    ```
+    
+    This builds all components:
+    - Rust WASM plugins (prompt_gateway, llm_gateway)
+    - brightstaff native binary
+    - Python CLI tools
+    - Envoy proxy configuration
+  </Step>
+  
+  <Step title="Tag the image">
+    Tags the built image as `katanemo/plano:0.4.9` (version from `PLANO_DOCKER_IMAGE` constant).
+  </Step>
+</Steps>
+
+## Output
+
+```bash
+$ planoai build
+
+Building plano image from /home/user/plano...
+
+[+] Building 127.3s (24/24) FINISHED
+ => [internal] load build definition from Dockerfile
+ => => transferring dockerfile: 2.1kB
+ => [internal] load .dockerignore
+ => => transferring context: 34B
+ => [internal] load metadata for docker.io/library/rust:1.75
+...
+ => => naming to docker.io/katanemo/plano:0.4.9
+
+plano image built successfully.
+```
+
+## Build Process Details
+
+The Dockerfile builds Plano in multiple stages:
+
+### Stage 1: Rust WASM Compilation
+
+```dockerfile
+# Compile WASM plugins for Envoy
+FROM rust:1.75 as wasm-builder
+RUN rustup target add wasm32-wasip1
+WORKDIR /build/crates
+COPY crates/ .
+RUN cargo build --release --target=wasm32-wasip1 \
+    -p llm_gateway -p prompt_gateway
+```
+
+Produces:
+- `llm_gateway.wasm`
+- `prompt_gateway.wasm`
+
+### Stage 2: Native Rust Binary
+
+```dockerfile
+# Compile brightstaff server
+RUN cargo build --release -p brightstaff
+```
+
+Produces:
+- `brightstaff` binary
+
+### Stage 3: Python CLI
+
+```dockerfile
+# Install Python dependencies
+COPY cli/ /app/cli/
+RUN pip install -e /app/cli/
+```
+
+### Stage 4: Final Image
+
+```dockerfile
+# Combine everything with Envoy
+FROM envoyproxy/envoy:v1.28-latest
+COPY --from=wasm-builder /build/target/wasm32-wasip1/release/*.wasm /etc/envoy/
+COPY --from=rust-builder /build/target/release/brightstaff /usr/local/bin/
+COPY config/ /app/config/
+...
+```
+
+## Examples
+
+### Build from repository root
+
+```bash
+cd ~/plano
+planoai build
+```
+
+### Build from subdirectory
+
+```bash
+cd ~/plano/crates/llm_gateway
+planoai build
+# Automatically finds ~/plano as repo root
+```
+
+### Build after making changes
+
+```bash
+# Edit Rust code
+vim crates/common/src/routing.rs
+
+# Rebuild
+planoai build
+
+# Test with new image
+planoai up
+```
+
+### Use custom image tag
+
+Override the default image tag:
+
+```bash
+PLANO_DOCKER_IMAGE=my-plano:dev planoai build
+```
+
+<Warning>
+This sets an environment variable but doesn't change the `-t` flag in the build command. For custom tags, edit `cli/planoai/consts.py` or use `docker tag` after building.
+</Warning>
+
+## Build Time
+
+Typical build times:
+
+- **First build:** 5-10 minutes (downloads dependencies, compiles from scratch)
+- **Incremental builds:** 2-5 minutes (leverages Docker layer cache)
+- **No changes:** ~30 seconds (all layers cached)
+
+<Tip>
+Docker caches build layers. If you only modify Python code, the Rust compilation layers are reused, making rebuilds faster.
+</Tip>
+
+## Disk Space
+
+Building Plano requires:
+
+- **Build layers:** ~1.5GB (intermediate compilation artifacts)
+- **Final image:** ~500MB
+- **Cargo cache:** ~1GB (Rust dependencies)
+
+Total: ~3GB for first build.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Not in repository error">
+    **Error:**
+    ```
+    Error: Could not find repository root. Make sure you're inside the plano repository.
+    ```
+    
+    **Cause:** Running `planoai build` outside the Plano git repository.
+    
+    **Solution:**
+    ```bash
+    # Clone the repository first
+    git clone https://github.com/katanemo/plano.git
+    cd plano
+    planoai build
+    ```
+  </Accordion>
+  
+  <Accordion title="Dockerfile not found">
+    **Error:**
+    ```
+    Error: Dockerfile not found at /path/to/plano/Dockerfile
+    ```
+    
+    **Cause:** Repository is corrupted or incomplete.
+    
+    **Solution:**
+    ```bash
+    # Ensure you have the complete repository
+    git pull origin main
+    ls Dockerfile  # Should exist
+    ```
+  </Accordion>
+  
+  <Accordion title="Docker build fails">
+    **Error:**
+    ```
+    Error building plano image: ...
+    ```
+    
+    **Common causes:**
+    - Network issues downloading dependencies
+    - Insufficient disk space
+    - Docker daemon not running
+    - Rust compilation errors (if source is modified)
+    
+    **Solution:**
+    ```bash
+    # Check Docker is running
+    docker ps
+    
+    # Check disk space
+    df -h
+    
+    # Clean Docker build cache
+    docker builder prune -a
+    
+    # Retry build
+    planoai build
+    ```
+  </Accordion>
+  
+  <Accordion title="Rust compilation errors">
+    **Error:**
+    ```
+    error[E0425]: cannot find function `foo` in this scope
+    ```
+    
+    **Cause:** Modified Rust code has syntax or logic errors.
+    
+    **Solution:**
+    ```bash
+    # Test compilation locally first
+    cd crates
+    cargo build --release --target=wasm32-wasip1 -p llm_gateway
+    cargo build --release -p brightstaff
+    
+    # Fix errors, then rebuild image
+    planoai build
+    ```
+  </Accordion>
+  
+  <Accordion title="WASM target not installed">
+    **Error:**
+    ```
+    error: failed to run `rustc` to learn about target-specific information
+    ```
+    
+    **Cause:** The Dockerfile handles this, but if running locally:
+    
+    **Solution:**
+    ```bash
+    rustup target add wasm32-wasip1
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Build Arguments
+
+The Dockerfile supports these build arguments:
+
+```bash
+docker build \
+  --build-arg RUST_VERSION=1.75 \
+  --build-arg ENVOY_VERSION=v1.28-latest \
+  -t katanemo/plano:custom \
+  .
+```
+
+<Note>
+The `planoai build` command doesn't expose these arguments. To customize, use `docker build` directly.
+</Note>
+
+## Development Workflow
+
+Typical development cycle:
+
+<Steps>
+  <Step title="Make changes">
+    Edit source code in `crates/`, `cli/`, or `config/`.
+  </Step>
+  
+  <Step title="Run tests">
+    ```bash
+    cd crates && cargo test
+    cd cli && uv run pytest
+    ```
+  </Step>
+  
+  <Step title="Build image">
+    ```bash
+    planoai build
+    ```
+  </Step>
+  
+  <Step title="Test locally">
+    ```bash
+    planoai up --foreground
+    # Test your changes
+    ```
+  </Step>
+  
+  <Step title="Iterate">
+    Repeat steps 1-4 until satisfied.
+  </Step>
+</Steps>
+
+## Using Built Images
+
+After building, the image is available locally:
+
+```bash
+# List images
+docker images | grep plano
+
+# Use with planoai up
+planoai up
+
+# Or run directly
+docker run -p 10000:10000 -v $(pwd)/config.yaml:/app/plano_config.yaml katanemo/plano:0.4.9
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Start Plano" icon="play" href="/cli/up">
+    Test your built image with `planoai up`
+  </Card>
+  
+  <Card title="Development Guide" icon="code" href="/development/overview">
+    Learn more about Plano's architecture
+  </Card>
+  
+  <Card title="Run Tests" icon="flask" href="/development/testing">
+    Run pre-commit and E2E tests
+  </Card>
+  
+  <Card title="Docker Best Practices" icon="docker" href="https://docs.docker.com/develop/dev-best-practices/">
+    Optimize your Docker builds
+  </Card>
+</CardGroup>

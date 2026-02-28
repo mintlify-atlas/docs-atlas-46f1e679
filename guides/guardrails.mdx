@@ -1,0 +1,699 @@
+---
+title: Guardrails & Filter Chains
+description: Add safety, validation, and context enrichment to your agents with Plano's filter chain system
+---
+
+Guardrails protect your agentic applications by validating inputs, preventing jailbreaks, enforcing domain boundaries, and enriching context before requests reach your agents. Plano implements guardrails through **Filter Chains** - sequences of processing steps applied to every request.
+
+## Why Guardrails Matter
+
+Without guardrails, AI applications are vulnerable to:
+
+- **Jailbreak attempts** - Users trying to bypass safety policies
+- **Out-of-scope queries** - Questions outside your application's domain
+- **PII exposure** - Sensitive data leaking into prompts
+- **Poor context** - Agents lacking necessary information to respond accurately
+- **Malicious inputs** - Injection attacks and prompt manipulation
+
+Guardrails provide a **consistent validation layer** that applies to all requests, reducing risk and improving reliability.
+
+## Filter Chain Architecture
+
+Filters are processing units that receive messages, transform or validate them, and either:
+
+1. **Pass the request through** (possibly modified)
+2. **Reject the request** with an error message
+
+```
+User Request
+    ↓
+┌─────────────────┐
+│  Input Guard    │ ← Validates domain/scope
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ Query Rewriter  │ ← Improves retrieval
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ Context Builder │ ← Adds knowledge base data
+└────────┬────────┘
+         ↓
+    Your Agent
+```
+
+Filters run **before** your agent, ensuring only validated, enriched requests reach your application logic.
+
+## Filter Types
+
+Plano supports two filter types:
+
+### MCP Filters (Model Context Protocol)
+
+Use FastMCP to build filters in Python:
+
+```python input_guard.py
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from typing import List
+
+mcp = FastMCP("Input Guard")
+
+@mcp.tool()
+async def input_guards(messages: List[dict]) -> List[dict]:
+    """Validates queries are within allowed domain."""
+    
+    # Get latest user message
+    user_query = next(
+        (msg["content"] for msg in reversed(messages) 
+         if msg["role"] == "user"),
+        ""
+    )
+    
+    # Validate scope (simplified)
+    is_valid = await validate_domain(user_query)
+    
+    if not is_valid:
+        raise ToolError(
+            "I can only assist with questions about our products and services. "
+            "Please ask about features, pricing, or technical support."
+        )
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10500)
+```
+
+### HTTP Filters
+
+External services that receive and validate requests:
+
+```python http_filter.py
+from fastapi import FastAPI, HTTPException
+import re
+
+app = FastAPI()
+
+@app.post("/validate")
+async def validate_input(request: dict):
+    """HTTP-based input validation."""
+    
+    messages = request.get("messages", [])
+    
+    # Check for PII patterns
+    last_message = messages[-1]["content"] if messages else ""
+    
+    if re.search(r'\b\d{3}-\d{2}-\d{4}\b', last_message):  # SSN pattern
+        raise HTTPException(
+            status_code=400,
+            detail="Please don't include sensitive information like SSN."
+        )
+    
+    return {"messages": messages, "valid": True}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10501)
+```
+
+## Basic Guardrail: Input Validation
+
+Let's build a domain enforcement guardrail for a customer support agent.
+
+<Steps>
+
+<Step title="Create the input guard filter">
+
+```python input_guard.py
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from openai import AsyncOpenAI
+import os
+from typing import List
+
+mcp = FastMCP("TechCorp Input Guard")
+
+# LLM client for validation
+client = AsyncOpenAI(
+    base_url=os.getenv("LLM_GATEWAY_ENDPOINT", "http://localhost:12000/v1"),
+    api_key="EMPTY"
+)
+
+@mcp.tool()
+async def input_guards(messages: List[dict]) -> List[dict]:
+    """Validates queries are about TechCorp products/services."""
+    
+    user_query = next(
+        (msg["content"] for msg in reversed(messages) 
+         if msg["role"] == "user"),
+        ""
+    )
+    
+    # Use LLM to check if query is in scope
+    validation_prompt = f"""You are a scope validator for TechCorp support.
+    
+    TechCorp provides:
+    - Cloud hosting services
+    - API management
+    - Database solutions
+    - Technical support
+    
+    Is this query about TechCorp's services?
+    Query: "{user_query}"
+    
+    Respond with ONLY 'yes' or 'no'."""
+    
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": validation_prompt}],
+        temperature=0.0
+    )
+    
+    is_valid = response.choices[0].message.content.strip().lower() == "yes"
+    
+    if not is_valid:
+        raise ToolError(
+            "I can only assist with questions related to TechCorp's services. "
+            "Please ask about our cloud hosting, APIs, databases, or support."
+        )
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10500)
+```
+</Step>
+
+<Step title="Configure in Plano">
+
+```yaml config.yaml
+version: v0.3.0
+
+filters:
+  - id: input_guards
+    url: http://localhost:10500
+    type: mcp  # default
+    tool: input_guards  # matches @mcp.tool() name
+
+agents:
+  - id: support_agent
+    url: http://localhost:10505
+
+listeners:
+  - type: agent
+    name: customer_support
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: support_agent
+        description: Answers questions about TechCorp services
+        filter_chain:
+          - input_guards  # Applied before agent
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+
+tracing:
+  random_sampling: 100
+```
+</Step>
+
+<Step title="Test the guardrail">
+
+```bash
+# Start filter
+python input_guard.py &
+
+# Start Plano
+planoai up config.yaml
+
+# Valid query - passes through
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": "What is the guaranteed uptime for TechCorp?"
+    }]
+  }'
+
+# Invalid query - rejected by guardrail
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": "What is the SLA for Apple Corporation?"
+    }]
+  }'
+```
+
+Rejected response:
+
+```json
+{
+  "error": "ClientError",
+  "agent": "input_guards",
+  "status": 400,
+  "agent_response": "I can only assist with questions related to TechCorp's services. Your query appears to be outside this scope."
+}
+```
+</Step>
+
+</Steps>
+
+## Multi-Filter RAG Pipeline
+
+Chain multiple filters for comprehensive request processing.
+
+### Complete RAG System
+
+```yaml config.yaml
+version: v0.3.0
+
+filters:
+  # 1. Domain validation
+  - id: input_guards
+    url: http://localhost:10500
+  
+  # 2. Query optimization
+  - id: query_rewriter
+    url: http://localhost:10501
+  
+  # 3. Context enrichment
+  - id: context_builder
+    url: http://localhost:10502
+
+agents:
+  - id: rag_agent
+    url: http://localhost:10505
+
+listeners:
+  - type: agent
+    name: rag_system
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: Retrieval-augmented generation for documentation
+        filter_chain:
+          - input_guards      # Step 1: Validate scope
+          - query_rewriter    # Step 2: Optimize query
+          - context_builder   # Step 3: Add context
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+
+tracing:
+  random_sampling: 100
+```
+
+### Query Rewriter Filter
+
+Improve queries for better retrieval:
+
+```python query_rewriter.py
+from fastmcp import FastMCP
+from openai import AsyncOpenAI
+import os
+
+mcp = FastMCP("Query Rewriter")
+
+client = AsyncOpenAI(
+    base_url=os.getenv("LLM_GATEWAY_ENDPOINT", "http://localhost:12000/v1"),
+    api_key="EMPTY"
+)
+
+@mcp.tool()
+async def query_rewriter(messages: list) -> list:
+    """Rewrites user queries for better retrieval."""
+    
+    user_query = next(
+        (msg["content"] for msg in reversed(messages) 
+         if msg["role"] == "user"),
+        ""
+    )
+    
+    rewrite_prompt = f"""Rewrite this query to be more specific and keyword-rich 
+    for document retrieval. Keep the core intent but expand abbreviations and 
+    add relevant technical terms.
+    
+    Original: "{user_query}"
+    
+    Rewritten query (one line):"""
+    
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": rewrite_prompt}],
+        temperature=0.3
+    )
+    
+    rewritten = response.choices[0].message.content.strip()
+    
+    # Update the last user message
+    for msg in reversed(messages):
+        if msg["role"] == "user":
+            msg["content"] = rewritten
+            break
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10501)
+```
+
+### Context Builder Filter
+
+Enrich queries with knowledge base data:
+
+```python context_builder.py
+from fastmcp import FastMCP
+import httpx
+from typing import List
+
+mcp = FastMCP("Context Builder")
+
+# Simulated knowledge base
+KNOWLEDGE_BASE = {
+    "uptime": "TechCorp guarantees 99.95% uptime with SLA credits for violations.",
+    "pricing": "TechCorp offers tiered pricing: Starter ($99/mo), Pro ($299/mo), Enterprise (custom).",
+    "support": "24/7 support via email, chat, and phone for Pro+ plans."
+}
+
+@mcp.tool()
+async def context_builder(messages: list) -> list:
+    """Adds relevant knowledge base context to queries."""
+    
+    user_query = next(
+        (msg["content"] for msg in reversed(messages) 
+         if msg["role"] == "user"),
+        ""
+    ).lower()
+    
+    # Simple keyword matching (use vector search in production)
+    relevant_context = []
+    for key, value in KNOWLEDGE_BASE.items():
+        if key in user_query:
+            relevant_context.append(value)
+    
+    if relevant_context:
+        # Add context as a system message
+        context_msg = {
+            "role": "system",
+            "content": f"Relevant information: {' '.join(relevant_context)}"
+        }
+        messages.insert(0, context_msg)
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10502)
+```
+
+### Request Flow
+
+With all three filters:
+
+```
+Original: "What's the uptime SLA?"
+    ↓
+[Input Guard]
+✓ Valid - about TechCorp services
+    ↓
+[Query Rewriter]
+"What is TechCorp's guaranteed uptime and Service Level Agreement?"
+    ↓
+[Context Builder]
+Adds: "TechCorp guarantees 99.95% uptime with SLA credits..."
+    ↓
+[RAG Agent]
+Generates answer with full context
+```
+
+## Jailbreak Prevention
+
+Detect and block prompt injection attempts:
+
+```python jailbreak_guard.py
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+import re
+
+mcp = FastMCP("Jailbreak Guard")
+
+# Common jailbreak patterns
+JAILBREAK_PATTERNS = [
+    r"ignore (all )?previous instructions",
+    r"disregard .* instructions",
+    r"you are now .* different",
+    r"forget .* training",
+    r"new instructions:",
+    r"pretend (to be|you are)",
+    r"act as (if|though)",
+    r"roleplay as",
+    r"system prompt",
+    r"reveal .* instructions"
+]
+
+@mcp.tool()
+async def jailbreak_guard(messages: list) -> list:
+    """Detects and blocks jailbreak attempts."""
+    
+    user_query = next(
+        (msg["content"] for msg in reversed(messages) 
+         if msg["role"] == "user"),
+        ""
+    ).lower()
+    
+    # Check for suspicious patterns
+    for pattern in JAILBREAK_PATTERNS:
+        if re.search(pattern, user_query, re.IGNORECASE):
+            raise ToolError(
+                "Your request appears to contain instructions that violate our usage policy. "
+                "Please rephrase your question."
+            )
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10503)
+```
+
+## PII Detection and Redaction
+
+Protect sensitive information:
+
+```python pii_guard.py
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+import re
+
+mcp = FastMCP("PII Guard")
+
+PII_PATTERNS = {
+    "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+    "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+    "phone": r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b",
+    "credit_card": r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"
+}
+
+@mcp.tool()
+async def pii_guard(messages: list) -> list:
+    """Detects PII and either blocks or redacts."""
+    
+    for msg in messages:
+        if msg["role"] == "user":
+            content = msg["content"]
+            
+            # Check for PII
+            for pii_type, pattern in PII_PATTERNS.items():
+                if re.search(pattern, content):
+                    # Option 1: Block request
+                    raise ToolError(
+                        f"Please don't include {pii_type} in your message. "
+                        "Remove sensitive information and try again."
+                    )
+                    
+                    # Option 2: Redact (uncomment to use)
+                    # msg["content"] = re.sub(pattern, "[REDACTED]", content)
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10504)
+```
+
+## Rate Limiting Filter
+
+Prevent abuse with usage limits:
+
+```python rate_limiter.py
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+import time
+from collections import defaultdict
+
+mcp = FastMCP("Rate Limiter")
+
+# Simple in-memory store (use Redis in production)
+user_requests = defaultdict(list)
+MAX_REQUESTS = 10
+TIME_WINDOW = 60  # seconds
+
+@mcp.tool()
+async def rate_limiter(messages: list, user_id: str = "anonymous") -> list:
+    """Enforces rate limits per user."""
+    
+    now = time.time()
+    
+    # Clean old requests
+    user_requests[user_id] = [
+        req_time for req_time in user_requests[user_id]
+        if now - req_time < TIME_WINDOW
+    ]
+    
+    # Check limit
+    if len(user_requests[user_id]) >= MAX_REQUESTS:
+        raise ToolError(
+            f"Rate limit exceeded. Maximum {MAX_REQUESTS} requests per {TIME_WINDOW} seconds. "
+            "Please wait before trying again."
+        )
+    
+    # Record request
+    user_requests[user_id].append(now)
+    
+    return messages
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=10505)
+```
+
+## Docker Deployment
+
+Package filters with Docker Compose:
+
+```yaml docker-compose.yaml
+services:
+  plano:
+    image: katanemo/plano:latest
+    ports:
+      - "8001:8001"
+      - "12000:12000"
+    volumes:
+      - ./config.yaml:/app/plano_config.yaml
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+  
+  input-guard:
+    build:
+      context: ./filters/input_guard
+    ports:
+      - "10500:10500"
+    environment:
+      - LLM_GATEWAY_ENDPOINT=http://host.docker.internal:12000/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  
+  query-rewriter:
+    build:
+      context: ./filters/query_rewriter
+    ports:
+      - "10501:10501"
+    environment:
+      - LLM_GATEWAY_ENDPOINT=http://host.docker.internal:12000/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  
+  context-builder:
+    build:
+      context: ./filters/context_builder
+    ports:
+      - "10502:10502"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Order filters by purpose">
+    Structure filter chains logically:
+    
+    ```yaml
+    filter_chain:
+      - jailbreak_guard    # Security first
+      - pii_guard          # Privacy
+      - rate_limiter       # Abuse prevention
+      - input_guards       # Domain validation
+      - query_rewriter     # Query optimization
+      - context_builder    # Enrichment last
+    ```
+  </Accordion>
+  
+  <Accordion title="Use fast filters early">
+    Put lightweight checks before expensive operations:
+    
+    ```yaml
+    filter_chain:
+      - rate_limiter       # Fast: in-memory check
+      - pii_guard          # Fast: regex patterns
+      - input_guards       # Expensive: LLM call
+      - context_builder    # Expensive: vector search
+    ```
+  </Accordion>
+  
+  <Accordion title="Provide clear error messages">
+    Help users understand rejections:
+    
+    ```python
+    # Good
+    raise ToolError(
+        "I can only assist with TechCorp products. "
+        "Please ask about hosting, APIs, or databases."
+    )
+    
+    # Bad
+    raise ToolError("Invalid query")
+    ```
+  </Accordion>
+  
+  <Accordion title="Test filters independently">
+    Validate each filter before chaining:
+    
+    ```bash
+    # Test filter directly
+    curl http://localhost:10500/mcp \
+      -H "Content-Type: application/json" \
+      -d '{
+        "method": "tools/call",
+        "params": {
+          "name": "input_guards",
+          "arguments": {"messages": [...]}
+        }
+      }'
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Complete Demo
+
+Explore the full RAG system with filter chains:
+
+<CardGroup cols={2}>
+  <Card title="HTTP Filter RAG" icon="filter" href="https://github.com/katanemo/plano/tree/main/demos/filter_chains/http_filter">
+    Complete RAG agent with input guards, query rewriter, and context builder
+  </Card>
+  
+  <Card title="MCP Filter RAG" icon="plug" href="https://github.com/katanemo/plano/tree/main/demos/filter_chains/mcp_filter">
+    MCP-based filters with domain validation and knowledge retrieval
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Tracing & Monitoring" icon="chart-line" href="/guides/tracing-monitoring">
+  Learn how to trace filter chain execution and monitor guardrail performance
+</Card>

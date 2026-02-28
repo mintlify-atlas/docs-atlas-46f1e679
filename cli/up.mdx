@@ -1,0 +1,387 @@
+---
+title: planoai up
+description: Start the Plano proxy server with your configuration
+---
+
+The `planoai up` command starts the Plano proxy server in a Docker container, validates your configuration, checks for required API keys, and monitors health status.
+
+## Basic Usage
+
+```bash
+planoai up
+```
+
+This starts Plano using `config.yaml` in the current directory.
+
+## Command Signature
+
+```bash
+planoai up [FILE] [OPTIONS]
+```
+
+## Arguments
+
+<ParamField path="FILE" type="string" optional>
+  Path to a specific configuration file.
+  
+  ```bash
+  planoai up config.yaml
+  planoai up ./configs/production.yaml
+  ```
+  
+  If not provided, Plano looks for `config.yaml` in the `--path` directory.
+</ParamField>
+
+## Options
+
+<ParamField path="--path" type="string" default=".">
+  Directory containing the configuration file.
+  
+  ```bash
+  planoai up --path ./configs
+  ```
+  
+  Plano will look for `config.yaml` in this directory. Also used to locate `.env` files for API keys.
+</ParamField>
+
+<ParamField path="--foreground" type="flag" default="false">
+  Run Plano in the foreground and stream logs to the terminal.
+  
+  ```bash
+  planoai up --foreground
+  ```
+  
+  <Note>
+  In foreground mode, Plano streams all gateway logs directly to your terminal. Press Ctrl+C to stop.
+  </Note>
+</ParamField>
+
+<ParamField path="--with-tracing" type="flag" default="false">
+  Start a local OTLP trace collector for distributed tracing.
+  
+  ```bash
+  planoai up --with-tracing
+  ```
+  
+  Launches a gRPC server on port 4317 (or `--tracing-port`) that collects OpenTelemetry traces from Plano. Use `planoai trace` to view collected traces.
+</ParamField>
+
+<ParamField path="--tracing-port" type="integer" default="4317">
+  Port for the OTLP trace collector when using `--with-tracing`.
+  
+  ```bash
+  planoai up --with-tracing --tracing-port 4318
+  ```
+  
+  The trace collector listens on `0.0.0.0:<port>` for incoming OTLP gRPC data.
+</ParamField>
+
+## Startup Flow
+
+<Steps>
+  <Step title="Configuration Validation">
+    Plano validates your configuration against the schema:
+    
+    ```bash
+    $ planoai up
+    
+    Plano CLI v0.4.9
+    
+    ✓ Configuration valid
+    ```
+    
+    If validation fails, you'll see detailed error messages.
+  </Step>
+  
+  <Step title="API Key Verification">
+    Plano checks that all required provider API keys are available:
+    
+    ```bash
+    ✓ Found ANTHROPIC_API_KEY
+    ✓ Found OPENAI_API_KEY
+    ```
+    
+    Keys are loaded from:
+    1. Environment variables
+    2. `.env` file in the config directory
+    
+    <Warning>
+    If required keys are missing, Plano will exit with an error listing the missing keys.
+    </Warning>
+  </Step>
+  
+  <Step title="Container Startup">
+    Plano starts the Docker container with your configuration:
+    
+    ```bash
+    Starting plano gateway, image: katanemo/plano:0.4.9
+    ```
+    
+    The container is named `plano` and runs in detached mode (unless `--foreground` is set).
+  </Step>
+  
+  <Step title="Health Monitoring">
+    Plano polls `/healthz` endpoints on all configured listeners:
+    
+    ```bash
+    plano status: running, health status: healthy
+    plano is running and is healthy!
+    ```
+    
+    Startup completes when all listeners are healthy or times out after 120 seconds.
+  </Step>
+</Steps>
+
+## Examples
+
+### Start with default configuration
+
+```bash
+planoai up
+```
+
+### Use a specific config file
+
+```bash
+planoai up production.yaml
+```
+
+### Run in foreground with logs
+
+```bash
+planoai up --foreground
+```
+
+**Output:**
+```
+Plano CLI v0.4.9
+
+✓ Configuration valid
+plano is running and is healthy!
+[gateway logs stream here...]
+```
+
+### Enable distributed tracing
+
+```bash
+planoai up --with-tracing
+```
+
+**Output:**
+```
+Plano CLI v0.4.9
+
+✓ Configuration valid
+✓ Trace collector listening on 0.0.0.0:4317
+plano is running and is healthy!
+Plano is running. Trace collector active on port 4317. Press Ctrl+C to stop.
+```
+
+<Tip>
+When running with `--with-tracing`, the CLI process stays alive to keep the trace collector running. Use `planoai trace` in another terminal to view traces.
+</Tip>
+
+### Use custom tracing port
+
+```bash
+planoai up --with-tracing --tracing-port 9999
+```
+
+### Specify config directory
+
+```bash
+planoai up --path ./my-configs
+```
+
+This looks for `./my-configs/config.yaml` and `./my-configs/.env`.
+
+## Port Mappings
+
+Plano automatically maps the following ports from the container to your host:
+
+<ParamField path="Listener Ports" type="dynamic">
+  All ports defined in your `listeners` configuration are exposed.
+  
+  For example, if you configure:
+  ```yaml
+  listeners:
+    ingress_traffic:
+      type: prompt
+      port: 10000
+    egress_traffic:
+      type: model
+      port: 12000
+  ```
+  
+  Plano maps `10000:10000` and `12000:12000`.
+</ParamField>
+
+<ParamField path="12001" type="fixed">
+  Internal brightstaff server port (always mapped).
+</ParamField>
+
+<ParamField path="19901" type="fixed">
+  Envoy admin interface on `localhost:19901/stats`, `localhost:19901/config_dump`.
+</ParamField>
+
+## Environment Variables Passed to Container
+
+Plano automatically passes these environment variables to the Docker container:
+
+<ParamField path="LOG_LEVEL" type="string" default="info">
+  Controls log verbosity for both Rust components (`RUST_LOG`) and Envoy.
+  
+  Set via:
+  ```bash
+  LOG_LEVEL=debug planoai up
+  ```
+</ParamField>
+
+<ParamField path="OTEL_TRACING_GRPC_ENDPOINT" type="string">
+  OTLP gRPC endpoint for trace export.
+  
+  - **Default:** `http://host.docker.internal:4317`
+  - **With `--with-tracing`:** Set to the trace collector port
+  
+  Configure in your `config.yaml` to send traces to external collectors.
+</ParamField>
+
+<ParamField path="Provider API Keys" type="dynamic">
+  All provider API keys referenced in your configuration (e.g., `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) are passed through.
+</ParamField>
+
+## API Key Loading
+
+Plano discovers API keys in this order:
+
+1. **Environment variables** in your shell
+2. **`.env` file** in the config directory
+
+The `.env` file format:
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...
+```
+
+<Warning>
+If a required key is missing, `planoai up` will fail with:
+
+```
+✗ Missing API keys!
+
+  • ANTHROPIC_API_KEY not found
+
+Set the environment variable(s):
+  export ANTHROPIC_API_KEY="your-api-key"
+
+Or create a .env file in the config directory.
+```
+</Warning>
+
+## Configuration Validation Errors
+
+If your configuration is invalid:
+
+```bash
+$ planoai up
+
+Plano CLI v0.4.9
+
+✗ Validation failed
+  listeners.ingress_traffic.type: must be one of ['prompt', 'model', 'agent']
+```
+
+Validation uses the JSON Schema at `plano_config_schema.yaml`.
+
+## Replacing Existing Instances
+
+If a Plano container is already running, `planoai up` will:
+
+1. Stop the existing container
+2. Remove it
+3. Start a fresh container with the new configuration
+
+This ensures clean state on every startup.
+
+## Health Check Timeout
+
+By default, Plano waits up to **120 seconds** for all listeners to become healthy.
+
+If the timeout is exceeded:
+```
+stopping log monitoring after 120 seconds.
+[gateway logs printed]
+```
+
+Common causes:
+- Invalid configuration
+- Port conflicts
+- Docker resource constraints
+- Network issues reaching LLM providers
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    **Error:** Container fails to start due to port conflict.
+    
+    **Solution:** Check what's using the port:
+    ```bash
+    lsof -i :10000
+    ```
+    
+    Stop the conflicting process or change your listener ports in `config.yaml`.
+  </Accordion>
+  
+  <Accordion title="Container exits immediately">
+    **Error:** `plano container exited unexpectedly.`
+    
+    **Solution:** Check logs for errors:
+    ```bash
+    docker logs plano
+    ```
+    
+    Common causes:
+    - Configuration syntax errors
+    - Invalid model names
+    - Missing Docker resources
+  </Accordion>
+  
+  <Accordion title="Trace collector port conflict">
+    **Error:** `Failed to start trace collector on port 4317`
+    
+    **Solution:** Either:
+    1. Use a different port: `planoai up --with-tracing --tracing-port 4318`
+    2. Stop the existing listener: `planoai trace stop`
+  </Accordion>
+  
+  <Accordion title="Missing Docker image">
+    **Error:** Cannot pull `katanemo/plano:0.4.9`
+    
+    **Solution:** 
+    - Check Docker is running
+    - Verify network connectivity
+    - For local development, build from source: `planoai build`
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="View Logs" icon="file-lines" href="/cli/logs">
+    Monitor access logs and debug output
+  </Card>
+  
+  <Card title="Trace Requests" icon="route" href="/cli/trace">
+    Collect and analyze distributed traces
+  </Card>
+  
+  <Card title="Configuration Guide" icon="gear" href="/configuration/overview">
+    Explore all configuration options
+  </Card>
+  
+  <Card title="Stop Plano" icon="stop" href="/cli/down">
+    Learn how to gracefully stop Plano
+  </Card>
+</CardGroup>

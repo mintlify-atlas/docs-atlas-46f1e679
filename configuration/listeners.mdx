@@ -1,0 +1,455 @@
+---
+title: Listeners
+description: Configure how Plano accepts and handles incoming traffic
+---
+
+Listeners define how Plano accepts incoming HTTP traffic and what processing mode to use. Plano supports three listener types: **model** (LLM gateway), **prompt** (prompt routing), and **agent** (agent orchestration).
+
+## Listener Types
+
+<CardGroup cols={3}>
+  <Card title="Model" icon="brain">
+    LLM gateway mode - routes requests directly to model providers
+  </Card>
+  <Card title="Prompt" icon="message">
+    Prompt gateway mode - routes based on prompt intent matching
+  </Card>
+  <Card title="Agent" icon="robot">
+    Agent orchestration mode - intelligently routes to multiple agents
+  </Card>
+</CardGroup>
+
+## Configuration Format
+
+Listeners are defined as an array under the `listeners` key:
+
+```yaml
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+    address: 0.0.0.0
+    max_retries: 3
+```
+
+## Common Parameters
+
+All listener types share these configuration options:
+
+<ParamField path="type" type="string" required>
+  The listener mode. Determines how requests are processed.
+  
+  **Options:**
+  - `model` - LLM gateway (direct model routing)
+  - `prompt` - Prompt gateway (intent-based routing)
+  - `agent` - Agent orchestration (multi-agent routing)
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  A unique identifier for this listener. Used in logs and traces.
+  
+  **Example:** `model_listener`, `prompt_gateway`, `travel_service`
+</ParamField>
+
+<ParamField path="port" type="integer">
+  The TCP port to listen on.
+  
+  **Default:** Varies by type
+  
+  **Example:** `12000`, `10000`, `8001`
+</ParamField>
+
+<ParamField path="address" type="string">
+  The IP address to bind to.
+  
+  **Default:** `0.0.0.0` (all interfaces)
+  
+  **Example:** `127.0.0.1` (localhost only)
+</ParamField>
+
+<ParamField path="timeout" type="string">
+  Request timeout duration.
+  
+  **Format:** Duration string (e.g., `30s`, `5m`)
+  
+  **Example:** `30s`
+</ParamField>
+
+<ParamField path="max_retries" type="integer">
+  Maximum number of retry attempts for failed requests.
+  
+  **Default:** `0` (no retries)
+  
+  **Example:** `3`
+</ParamField>
+
+## Model Listener
+
+Model listeners operate as an LLM gateway, routing requests directly to configured model providers. This is the simplest mode and ideal for basic LLM proxying.
+
+### Configuration
+
+```yaml
+listeners:
+  - type: model
+    name: model_1
+    address: 0.0.0.0
+    port: 12000
+    max_retries: 3
+
+model_providers:
+  - access_key: $OPENAI_API_KEY
+    model: openai/gpt-4o-mini
+  - access_key: $OPENAI_API_KEY
+    model: openai/gpt-4o
+    default: true
+  - access_key: $ANTHROPIC_API_KEY
+    model: anthropic/claude-sonnet-4-20250514
+```
+
+### Usage
+
+Make OpenAI-compatible requests to the listener:
+
+```bash
+curl http://localhost:12000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+<Tip>
+  Model listeners support all standard OpenAI API endpoints including `/v1/chat/completions` and `/v1/completions`.
+</Tip>
+
+## Prompt Listener
+
+Prompt listeners analyze incoming prompts and route them to appropriate backend endpoints based on intent matching. This enables dynamic routing to specialized services.
+
+### Configuration
+
+```yaml
+listeners:
+  - type: prompt
+    name: prompt_listener
+    port: 10000
+
+endpoints:
+  weather_forecast_service:
+    endpoint: host.docker.internal:18083
+    connect_timeout: 0.005s
+
+model_providers:
+  - access_key: $OPENAI_API_KEY
+    model: openai/gpt-4o
+    default: true
+
+prompt_targets:
+  - name: get_current_weather
+    description: Get current weather at a location.
+    parameters:
+      - name: location
+        description: The location to get the weather for
+        required: true
+        type: string
+        format: City, State
+      - name: days
+        description: the number of days for the request
+        required: true
+        type: int
+    endpoint:
+      name: weather_forecast_service
+      path: /weather
+      http_method: POST
+
+  - name: default_target
+    default: true
+    description: Default target for unmatched prompts.
+    endpoint:
+      name: weather_forecast_service
+      path: /default_target
+      http_method: POST
+    auto_llm_dispatch_on_response: false
+```
+
+### How It Works
+
+<Steps>
+  <Step title="Intent Analysis">
+    Plano analyzes the user's prompt to determine intent
+  </Step>
+  <Step title="Target Matching">
+    Matches the intent against configured `prompt_targets`
+  </Step>
+  <Step title="Parameter Extraction">
+    Extracts required parameters from the prompt
+  </Step>
+  <Step title="Endpoint Invocation">
+    Calls the matched endpoint with extracted parameters
+  </Step>
+</Steps>
+
+<Info>
+  Prompt listeners use the configured model provider for intent analysis and parameter extraction.
+</Info>
+
+## Agent Listener
+
+Agent listeners provide intelligent orchestration across multiple AI agents. Plano analyzes requests and routes them to the most appropriate agent(s).
+
+### Configuration
+
+<ParamField path="router" type="string">
+  The routing strategy to use for agent selection.
+  
+  **Options:**
+  - `plano_orchestrator_v1` - Intelligent agent selection based on descriptions
+</ParamField>
+
+<ParamField path="agents" type="array" required>
+  List of agents available to this listener. Each agent must be defined in the top-level `agents` section.
+</ParamField>
+
+<ParamField path="agents[].id" type="string" required>
+  The agent identifier, matching an entry in the top-level `agents` array.
+</ParamField>
+
+<ParamField path="agents[].description" type="string" required>
+  A detailed description of the agent's capabilities. The orchestrator uses this to determine when to route to this agent.
+  
+  <Warning>
+    Write clear, comprehensive descriptions. The quality of routing depends on how well you describe each agent's capabilities.
+  </Warning>
+</ParamField>
+
+<ParamField path="agents[].default" type="boolean">
+  Whether this agent should handle requests when no other agent matches.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="agents[].filter_chain" type="array">
+  List of filter IDs to apply before sending requests to this agent. Filters are executed in order.
+  
+  **Example:** `["input_guards", "query_rewriter", "context_builder"]`
+</ParamField>
+
+### Example: Multi-Agent Travel Service
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: travel_booking_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          WeatherAgent provides real-time weather information and forecasts 
+          for any city worldwide using the Open-Meteo API. It handles questions
+          like "What's the weather in Paris?" or "What's the forecast for NYC?"
+          
+          Capabilities:
+          * Current temperature and conditions
+          * Multi-day forecasts
+          * Sunrise/sunset times
+          * Understands conversation context for location references
+
+      - id: flight_agent
+        description: |
+          FlightAgent provides live flight information between airports using
+          the FlightAware AeroAPI. It handles questions like "What flights go
+          from NYC to LAX?" or "Are there direct flights to London?"
+          
+          Capabilities:
+          * Real-time flight status and delays
+          * Departure and arrival times
+          * Gate and terminal information
+          * Automatically resolves city names to airport codes
+          * Understands conversation context for origin/destination
+
+tracing:
+  random_sampling: 100
+```
+
+### Example: Agent with Filter Chain
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://host.docker.internal:10505
+
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    type: mcp
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    type: mcp
+  - id: context_builder
+    url: http://host.docker.internal:10502
+    type: mcp
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: rag_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: Virtual assistant for retrieval augmented generation tasks
+        filter_chain:
+          - input_guards      # Validate and sanitize input
+          - query_rewriter    # Optimize query for retrieval
+          - context_builder   # Add relevant context
+```
+
+<Info>
+  Filters in the chain are executed sequentially. Each filter can modify the request before it reaches the agent.
+</Info>
+
+## Multiple Listeners
+
+You can configure multiple listeners on different ports:
+
+```yaml
+listeners:
+  # Model gateway for direct LLM access
+  - type: model
+    name: model_gateway
+    port: 12000
+
+  # Prompt gateway for intent routing
+  - type: prompt
+    name: prompt_gateway
+    port: 10000
+
+  # Agent orchestration
+  - type: agent
+    name: agent_orchestrator
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: assistant
+        description: General purpose assistant
+```
+
+This allows you to expose different capabilities on different ports.
+
+## Legacy Format (Deprecated)
+
+<Warning>
+  The following format is deprecated and only supported in versions `v0.1` and `v0.1.0`. Use the array format shown above for `v0.3.0`.
+</Warning>
+
+```yaml
+version: v0.1
+
+listeners:
+  ingress_traffic:
+    address: 0.0.0.0
+    port: 10000
+    message_format: openai
+    timeout: 30s
+  egress_traffic:
+    address: 0.0.0.0
+    port: 12000
+    message_format: openai
+    timeout: 30s
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use descriptive names">
+    Choose listener names that clearly indicate their purpose:
+    - ✅ `travel_booking_service`, `content_generation_api`
+    - ❌ `listener_1`, `test`
+  </Accordion>
+  
+  <Accordion title="Set appropriate timeouts">
+    Configure timeouts based on expected response times:
+    - Short timeouts (5-10s) for simple queries
+    - Longer timeouts (30-60s) for complex agent orchestration
+    - Consider network latency to upstream services
+  </Accordion>
+  
+  <Accordion title="Use retry logic cautiously">
+    Enable `max_retries` for:
+    - ✅ Transient network failures
+    - ✅ Rate limit retries (with exponential backoff)
+    - ❌ Non-idempotent operations (may cause duplicates)
+  </Accordion>
+  
+  <Accordion title="Write detailed agent descriptions">
+    The quality of agent orchestration depends on description clarity:
+    - Include specific capabilities and use cases
+    - Mention what types of questions the agent handles
+    - Provide examples of typical queries
+    - Specify limitations or boundaries
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Port already in use">
+  If Plano fails to start with a port binding error:
+  
+  1. Check if another process is using the port:
+     ```bash
+     lsof -i :12000
+     ```
+  2. Change the port in your configuration
+  3. Ensure Docker port mappings match your config
+</Accordion>
+
+<Accordion title="Requests timing out">
+  If requests consistently timeout:
+  
+  1. Increase the `timeout` value
+  2. Check upstream service health
+  3. Verify network connectivity
+  4. Review Plano logs: `planoai logs`
+</Accordion>
+
+<Accordion title="Agent not being selected">
+  If the orchestrator isn't routing to your agent:
+  
+  1. Improve the agent description
+  2. Add more specific capability details
+  3. Include example queries in the description
+  4. Check trace logs to see routing decisions: `planoai trace`
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Agents" icon="robot" href="/configuration/agents">
+    Register agents for orchestration
+  </Card>
+  <Card title="Model Providers" icon="brain" href="/configuration/model-providers">
+    Set up LLM provider routing
+  </Card>
+</CardGroup>

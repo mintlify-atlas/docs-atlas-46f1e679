@@ -1,0 +1,614 @@
+---
+title: LLM Gateway & Routing
+description: Configure model providers, implement routing strategies, and manage LLM access with preference-aligned routing
+---
+
+Plano's LLM Gateway centralizes model access, API key management, and intelligent routing across multiple LLM providers. It supports three routing strategies: model-based, alias-based, and preference-aligned routing using Arch-Router.
+
+## Why Use an LLM Gateway?
+
+Without Plano, managing multiple LLM providers requires:
+
+- Scattered API keys and provider-specific SDKs across your codebase
+- Hard-coded model selections in application logic
+- Manual fallback and retry logic for each provider
+- Separate instrumentation for observability
+
+Plano consolidates this into a single configuration:
+
+<CodeGroup>
+```yaml config.yaml
+version: v0.3.0
+
+model_providers:
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+  
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+
+listeners:
+  - type: model
+    name: llm_gateway
+    port: 12000
+    timeout: 30s
+
+tracing:
+  random_sampling: 100
+```
+
+```python client.py
+from openai import OpenAI
+
+# Point all LLM calls to Plano
+client = OpenAI(
+    base_url="http://localhost:12000/v1",
+    api_key="EMPTY"  # Plano manages keys
+)
+
+# Use any configured model
+response = client.chat.completions.create(
+    model="openai/gpt-5.2",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+</CodeGroup>
+
+## Model Providers Configuration
+
+Configure LLM providers with the `model_providers` section:
+
+### Supported Providers
+
+Plano supports these providers through the `hermesllm` library:
+
+| Provider | Format | Example |
+|----------|--------|----------|
+| OpenAI | `openai/model-name` | `openai/gpt-5.2` |
+| Anthropic | `anthropic/model-name` | `anthropic/claude-sonnet-4-5` |
+| Google | `google/model-name` | `google/gemini-2.0-flash` |
+| Mistral | `mistral/model-name` | `mistral/ministral-3b` |
+| Grok | `grok/model-name` | `grok/grok-3` |
+| AWS Bedrock | `bedrock/model-id` | `bedrock/anthropic.claude-v2` |
+| Azure OpenAI | `azure/deployment-name` | `azure/gpt-4-deployment` |
+| Together.ai | `together/model-name` | `together/meta-llama-3-8b` |
+
+### Basic Configuration
+
+```yaml config.yaml
+model_providers:
+  # Primary model
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true  # Used when no model specified
+  
+  # Alternative providers
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+  
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+```
+
+<Info>
+API keys can use environment variable syntax (`$KEY_NAME`) or be provided directly. Plano validates keys on startup.
+</Info>
+
+## Routing Strategies
+
+Plano offers three routing approaches to match different use cases.
+
+### 1. Model-Based Routing
+
+Direct model selection with full control:
+
+```python
+# Specify exact provider/model
+response = client.chat.completions.create(
+    model="openai/gpt-5.2",
+    messages=[{"role": "user", "content": "Explain quantum computing"}]
+)
+
+# Switch providers easily
+response = client.chat.completions.create(
+    model="anthropic/claude-sonnet-4-5",
+    messages=[{"role": "user", "content": "Write a story"}]
+)
+```
+
+**Best for:** Production workloads where you want predictable, deterministic routing.
+
+### 2. Alias-Based Routing
+
+Create semantic model names that decouple your code from providers:
+
+```yaml config.yaml
+model_providers:
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+  
+  - model: openai/gpt-5
+    access_key: $OPENAI_API_KEY
+  
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+
+model_aliases:
+  fast-model:
+    target: gpt-5.2
+  
+  reasoning-model:
+    target: gpt-5
+  
+  creative-model:
+    target: claude-sonnet-4-5
+```
+
+Use aliases in your code:
+
+```python
+# Semantic names instead of provider/model
+response = client.chat.completions.create(
+    model="fast-model",
+    messages=[{"role": "user", "content": "Quick summary please"}]
+)
+
+response = client.chat.completions.create(
+    model="reasoning-model",
+    messages=[{"role": "user", "content": "Solve this complex problem"}]
+)
+```
+
+**Best for:** Applications that need abstraction from specific models while maintaining control.
+
+### 3. Preference-Aligned Routing (Arch-Router)
+
+Let Plano automatically select the best model based on task type and your preferences:
+
+```yaml config.yaml
+model_providers:
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-5
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: code understanding
+        description: understand and explain existing code snippets
+      - name: complex reasoning
+        description: deep analysis and logical reasoning
+  
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+    routing_preferences:
+      - name: creative writing
+        description: creative content generation and storytelling
+      - name: code generation
+        description: generating new code snippets and functions
+```
+
+Let Arch-Router decide:
+
+```python
+# No model specified - router analyzes content
+response = client.chat.completions.create(
+    messages=[{
+        "role": "user",
+        "content": "Write a creative story about space exploration"
+    }]
+)
+# Routes to claude-sonnet-4-5 (creative writing preference)
+
+response = client.chat.completions.create(
+    messages=[{
+        "role": "user",
+        "content": "Explain this Python function: def fib(n): ..."
+    }]
+)
+# Routes to gpt-5 (code understanding preference)
+```
+
+**Best for:** Dynamic workloads where task types vary and you want optimal model selection without hard-coding.
+
+## Understanding Arch-Router
+
+Arch-Router is a 1.5B parameter model specifically trained for preference-based routing. Unlike traditional routing, it aligns with **human preferences** rather than benchmarks.
+
+### How It Works
+
+Arch-Router analyzes prompts to determine:
+
+1. **Domain**: High-level topic (e.g., programming, healthcare, legal)
+2. **Action**: Specific task type (e.g., summarize, generate code, translate)
+3. **Match**: Which configured model best matches your preferences
+
+<Steps>
+
+<Step title="Define routing preferences">
+Map task types to models:
+
+```yaml config.yaml
+model_providers:
+  - model: openai/gpt-5
+    routing_preferences:
+      - name: code understanding
+        description: understand and explain existing code
+      - name: debugging
+        description: identify and fix bugs in code
+  
+  - model: anthropic/claude-sonnet-4-5
+    routing_preferences:
+      - name: code generation
+        description: generate new code from requirements
+      - name: creative tasks
+        description: creative writing and brainstorming
+```
+</Step>
+
+<Step title="Send requests without specifying model">
+Arch-Router analyzes and routes automatically:
+
+```python
+# Router picks gpt-5 (code understanding)
+response = client.chat.completions.create(
+    messages=[{
+        "role": "user",
+        "content": "What does this React component do? <Component code>"
+    }]
+)
+
+# Router picks claude-sonnet-4-5 (code generation)
+response = client.chat.completions.create(
+    messages=[{
+        "role": "user",
+        "content": "Generate a React component for a login form"
+    }]
+)
+```
+</Step>
+
+</Steps>
+
+### Routing Preferences Best Practices
+
+<AccordionGroup>
+  <Accordion title="Consistent naming">
+    Names should align with descriptions:
+    
+    ```yaml
+    # Good
+    - name: quadratic_equation
+      description: solving quadratic equations
+    
+    # Bad - mismatch
+    - name: math
+      description: solving quadratic equations
+    ```
+  </Accordion>
+  
+  <Accordion title="Clear, specific descriptions">
+    Be unambiguous to minimize overlap:
+    
+    ```yaml
+    # Good
+    - name: math
+      description: solving and explaining math problems and concepts
+    
+    # Bad - too vague
+    - name: math
+      description: anything related to mathematics
+    ```
+  </Accordion>
+  
+  <Accordion title="Use noun-centric descriptors">
+    Nouns provide stable semantic signals:
+    
+    ```yaml
+    # Good
+    - name: code_debugging
+      description: debugging, error fixing, troubleshooting
+    
+    # Less ideal - verb-heavy
+    - name: fix_code
+      description: fix bugs and resolve issues
+    ```
+  </Accordion>
+  
+  <Accordion title="Include domain routes">
+    Always define a domain-level fallback:
+    
+    ```yaml
+    - name: programming
+      description: general programming questions
+    - name: code_generation
+      description: generate new code snippets
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Header-Based Model Override
+
+Override routing decisions with the `x-arch-llm-provider-hint` header:
+
+```bash
+curl http://localhost:12000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "x-arch-llm-provider-hint: mistral/ministral-3b" \
+  -d '{
+    "messages": [{"role": "user", "content": "hello"}],
+    "model": "gpt-4o"
+  }'
+```
+
+Response shows override worked:
+
+```json
+{
+  "id": "xxx",
+  "object": "chat.completion",
+  "model": "ministral-3b-latest",  // Override applied
+  "choices": [...]
+}
+```
+
+<Tip>
+Use header overrides for A/B testing or user-specific model selection without changing your code.
+</Tip>
+
+## Combining Routing Methods
+
+Mix strategies for maximum flexibility:
+
+```yaml config.yaml
+model_providers:
+  # Direct selection available
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  # Preference routing
+  - model: openai/gpt-5
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: complex_reasoning
+        description: deep analysis and problem solving
+  
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+    routing_preferences:
+      - name: creative_tasks
+        description: creative writing and content generation
+
+# Semantic aliases
+model_aliases:
+  fast-model:
+    target: gpt-5.2
+  reasoning-model:
+    target: gpt-5
+  creative-model:
+    target: claude-sonnet-4-5
+```
+
+Now you can:
+
+1. Use direct models: `model="openai/gpt-5.2"`
+2. Use aliases: `model="fast-model"`
+3. Let router decide: omit `model` parameter
+4. Override with headers: `x-arch-llm-provider-hint`
+
+## Monitoring and Observability
+
+Plano automatically captures metrics for all LLM calls:
+
+### Token Usage Tracking
+
+Every response includes usage statistics:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 150,
+    "completion_tokens": 75,
+    "total_tokens": 225
+  }
+}
+```
+
+### Prometheus Metrics
+
+Metrics endpoint at `http://localhost:19901/stats`:
+
+```yaml prometheus.yaml
+scrape_configs:
+  - job_name: plano
+    scrape_interval: 15s
+    metrics_path: /stats
+    static_configs:
+      - targets: ['localhost:19901']
+    params:
+      format: ['prometheus']
+```
+
+Key metrics:
+
+- `llm_request_duration_ms` - Request latency by model
+- `llm_token_usage_total` - Token consumption by model/type
+- `llm_request_total` - Request count by model/status
+- `llm_time_to_first_token_ms` - Streaming latency
+
+### OpenTelemetry Traces
+
+All LLM calls are traced automatically:
+
+```yaml config.yaml
+tracing:
+  random_sampling: 100
+  span_attributes:
+    header_prefixes:
+      - x-tenant-
+    static:
+      environment: production
+```
+
+Span attributes include:
+
+```
+llm.model = "gpt-5.2"
+llm.provider = "openai"
+llm.usage.prompt_tokens = 150
+llm.usage.completion_tokens = 75
+llm.duration_ms = 1250
+llm.time_to_first_token = 320
+```
+
+## Example: Complete LLM Gateway Setup
+
+Here's a production-ready configuration:
+
+<CodeGroup>
+```yaml config.yaml
+version: v0.3.0
+
+model_providers:
+  # Production models
+  - model: openai/gpt-5.2
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-5
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: code_understanding
+        description: understand and explain code
+      - name: complex_reasoning
+        description: deep analysis and problem solving
+  
+  # Fast, cost-effective models
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: simple_tasks
+        description: basic questions and simple tasks
+  
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+    routing_preferences:
+      - name: creative_writing
+        description: creative content and storytelling
+      - name: code_generation
+        description: generate new code from requirements
+
+model_aliases:
+  fast: gpt-4o-mini
+  default: gpt-5.2
+  reasoning: gpt-5
+  creative: claude-sonnet-4-5
+
+listeners:
+  - type: model
+    name: llm_gateway
+    port: 12000
+    timeout: 30s
+
+tracing:
+  random_sampling: 100
+  span_attributes:
+    header_prefixes:
+      - x-tenant-
+      - x-user-
+    static:
+      environment: production
+      service.version: "1.0.0"
+```
+
+```python app.py
+from openai import OpenAI
+import os
+
+# Single client for all models
+client = OpenAI(
+    base_url="http://localhost:12000/v1",
+    api_key="EMPTY"
+)
+
+def generate_with_routing(prompt: str):
+    """Let Arch-Router pick the best model."""
+    return client.chat.completions.create(
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+def generate_with_alias(prompt: str, alias: str = "fast"):
+    """Use semantic aliases."""
+    return client.chat.completions.create(
+        model=alias,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+def generate_explicit(prompt: str, model: str):
+    """Direct model selection."""
+    return client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}]
+    )
+```
+
+```yaml docker-compose.yaml
+services:
+  plano:
+    image: katanemo/plano:latest
+    ports:
+      - "12000:12000"
+      - "19901:19901"
+    volumes:
+      - ./config.yaml:/app/plano_config.yaml
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OTEL_TRACING_GRPC_ENDPOINT=http://jaeger:4317
+  
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+  
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+  
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+```
+</CodeGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building Agents" icon="robot" href="/guides/building-agents">
+    Learn how agents use the LLM gateway for model access
+  </Card>
+  
+  <Card title="Tracing & Monitoring" icon="chart-line" href="/guides/tracing-monitoring">
+    Set up comprehensive observability for LLM calls
+  </Card>
+  
+  <Card title="Preference Routing Demo" icon="route" href="https://github.com/katanemo/plano/tree/main/demos/llm_routing/preference_based_routing">
+    See Arch-Router in action with real examples
+  </Card>
+  
+  <Card title="Model Aliases Demo" icon="tag" href="https://github.com/katanemo/plano/tree/main/demos/llm_routing/model_alias_routing">
+    Explore semantic model aliasing patterns
+  </Card>
+</CardGroup>

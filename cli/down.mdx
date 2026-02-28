@@ -1,0 +1,261 @@
+---
+title: planoai down
+description: Stop the running Plano instance
+---
+
+The `planoai down` command gracefully stops and removes the Plano Docker container.
+
+## Basic Usage
+
+```bash
+planoai down
+```
+
+## Command Signature
+
+```bash
+planoai down
+```
+
+This command takes no arguments or options.
+
+## What It Does
+
+When you run `planoai down`, the CLI:
+
+<Steps>
+  <Step title="Finds the Plano container">
+    Locates the Docker container named `plano`.
+  </Step>
+  
+  <Step title="Stops the container">
+    Issues `docker stop plano` to gracefully stop all running processes.
+    
+    This triggers:
+    - Envoy proxy shutdown
+    - brightstaff server shutdown
+    - Cleanup of open connections
+  </Step>
+  
+  <Step title="Removes the container">
+    Issues `docker rm plano` to remove the stopped container.
+    
+    This frees up:
+    - Container resources
+    - Port bindings
+    - Volume mounts
+  </Step>
+</Steps>
+
+## Output
+
+```bash
+$ planoai down
+
+Plano CLI v0.4.9
+
+● Shutting down Plano...
+```
+
+The command completes when the container is fully stopped and removed.
+
+## Examples
+
+### Stop a running instance
+
+```bash
+$ planoai down
+
+Plano CLI v0.4.9
+
+● Shutting down Plano...
+```
+
+### When no instance is running
+
+If Plano isn't running, the command completes silently:
+
+```bash
+$ planoai down
+
+Plano CLI v0.4.9
+
+● Shutting down Plano...
+```
+
+No error is thrown if the container doesn't exist.
+
+## Container Cleanup
+
+The `planoai down` command removes the container entirely, but:
+
+<Note>
+**What's preserved:**
+- Your configuration files (`config.yaml`)
+- Environment files (`.env`)
+- Collected traces (if using a persistent trace backend)
+
+**What's removed:**
+- Container filesystem
+- In-memory state
+- Cached routing decisions
+- Ephemeral logs
+</Note>
+
+## Graceful Shutdown
+
+Docker's `stop` command sends `SIGTERM` to allow graceful shutdown:
+
+1. Envoy stops accepting new connections
+2. In-flight requests complete (up to 10s grace period)
+3. Processes exit cleanly
+4. File descriptors and sockets close
+
+If processes don't exit within the grace period, Docker sends `SIGKILL`.
+
+## Port Release
+
+After `planoai down`, all ports are released:
+
+- Listener ports (e.g., 10000, 12000)
+- Admin port (19901)
+- Internal port (12001)
+
+You can verify ports are free:
+```bash
+lsof -i :10000
+# Should return empty
+```
+
+## Common Workflows
+
+### Restart with new configuration
+
+```bash
+planoai down
+# Edit config.yaml
+planoai up
+```
+
+<Tip>
+You don't need to run `planoai down` manually before `planoai up`. The `up` command automatically stops and removes existing containers.
+</Tip>
+
+### Quick iteration cycle
+
+```bash
+# Start
+planoai up
+
+# Test your application
+curl http://localhost:10000/...
+
+# Stop
+planoai down
+
+# Make changes to config.yaml
+
+# Restart
+planoai up
+```
+
+### Emergency stop
+
+If `planoai down` hangs or doesn't respond, force-remove the container:
+
+```bash
+docker rm -f plano
+```
+
+## Comparison with Docker Commands
+
+| Task | Plano CLI | Docker CLI |
+|------|-----------|------------|
+| Stop Plano | `planoai down` | `docker stop plano && docker rm plano` |
+| Force stop | *(use Docker)* | `docker rm -f plano` |
+| View status | `docker ps` | `docker ps` |
+| Inspect logs | `planoai logs` | `docker logs plano` |
+
+## Exit Codes
+
+The command returns exit code `0` on success. It does not fail if the container doesn't exist.
+
+## Related Commands
+
+<CardGroup cols={2}>
+  <Card title="planoai up" icon="arrow-up" href="/cli/up">
+    Start Plano after stopping it
+  </Card>
+  
+  <Card title="planoai logs" icon="file-lines" href="/cli/logs">
+    View logs before stopping (useful for debugging)
+  </Card>
+  
+  <Card title="Docker Documentation" icon="docker" href="https://docs.docker.com/engine/reference/commandline/stop/">
+    Learn more about Docker stop behavior
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Command hangs">
+    **Issue:** `planoai down` doesn't complete.
+    
+    **Cause:** Container processes aren't responding to SIGTERM.
+    
+    **Solution:**
+    ```bash
+    # Force kill
+    docker kill plano
+    docker rm plano
+    ```
+  </Accordion>
+  
+  <Accordion title="Ports still in use after down">
+    **Issue:** Ports remain bound after stopping.
+    
+    **Cause:** Another process was using the ports, or zombie process.
+    
+    **Solution:**
+    ```bash
+    # Find what's using the port
+    lsof -i :10000
+    
+    # Kill the process
+    kill -9 <PID>
+    ```
+  </Accordion>
+  
+  <Accordion title="Permission denied">
+    **Issue:** `permission denied while trying to connect to the Docker daemon`
+    
+    **Cause:** Your user doesn't have Docker access.
+    
+    **Solution:**
+    ```bash
+    # Add user to docker group (Linux)
+    sudo usermod -aG docker $USER
+    newgrp docker
+    
+    # Or run with sudo
+    sudo planoai down
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Start Plano" icon="play" href="/cli/up">
+    Restart Plano with `planoai up`
+  </Card>
+  
+  <Card title="View Logs" icon="file-lines" href="/cli/logs">
+    Check logs before stopping
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Modify your configuration
+  </Card>
+</CardGroup>

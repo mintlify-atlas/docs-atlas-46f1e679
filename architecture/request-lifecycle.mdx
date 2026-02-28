@@ -1,0 +1,388 @@
+---
+title: Request Lifecycle
+description: Follow a request through Plano's data plane from ingress to egress
+---
+
+## Overview
+
+This guide traces the complete lifecycle of a request passing through Plano, from the moment it arrives at a downstream listener until the response is delivered back to the client.
+
+<img src="/images/plano_network_diagram_high_level.png" alt="Plano Network Diagram" />
+
+## Ingress Flow: Agent & Prompt Requests
+
+### 1. TCP Connection Establishment
+
+A TCP connection from downstream is accepted by an Envoy listener running on a worker thread.
+
+<Steps>
+  <Step title="Listener Accepts Connection">
+    One of Envoy's worker threads (typically one per CPU core) accepts the incoming connection
+  </Step>
+  
+  <Step title="Listener Filter Chain">
+    Provides SNI and other pre-TLS information for routing decisions
+  </Step>
+  
+  <Step title="Transport Socket Processing">
+    Typically TLS - decrypts incoming data for processing by HTTP filters
+  </Step>
+</Steps>
+
+<Info>
+  Each connection is bound to exactly one worker thread for its entire lifetime, eliminating cross-thread coordination overhead.
+</Info>
+
+### 2. HTTP Decoding
+
+The decrypted data stream is de-framed by the HTTP/2 codec in Envoy's HTTP connection manager:
+
+- Parses HTTP/2 frames or HTTP/1.1 requests
+- Generates unique request IDs (via `x-request-id` header)
+- Sanitizes headers (removes hop-by-hop headers)
+- Triggers HTTP filter chain execution
+
+### 3. Routing Decision (Agent vs Prompt Target)
+
+Brightstaff determines the execution path based on the request:
+
+<Tabs>
+  <Tab title="Agent Path">
+    Routes starting with `/agents/*` or configured agent listeners trigger **orchestrated workflows**:
+    
+    - Execute filter chains (guardrails, query rewrite, RAG)
+    - Select the appropriate agent based on routing strategy
+    - Manage multi-turn conversation state
+    - Stream responses back to the client
+    
+    **Implementation:** `brightstaff/src/handlers/agent_chat_completions.rs`
+  </Tab>
+  
+  <Tab title="LLM Path">
+    Routes like `/v1/chat/completions` or `/v1/messages` trigger **direct LLM routing**:
+    
+    - Resolve model aliases (`fast-llm` → `gpt-4o-mini`)
+    - Apply preference-based provider selection
+    - Translate request formats between providers
+    - Apply rate limiting per provider
+    
+    **Implementation:** `brightstaff/src/handlers/llm.rs` + `brightstaff/src/router/llm_router.rs`
+  </Tab>
+  
+  <Tab title="Function Call Path">
+    Prompt targets on port `:10000` trigger **deterministic tool dispatch**:
+    
+    - Extract parameters from natural language prompts
+    - Validate against function schemas
+    - Route to configured backend endpoints
+    - Handle errors via designated error targets
+    
+    **Implementation:** `brightstaff/src/handlers/function_calling.rs`
+  </Tab>
+</Tabs>
+
+## Agent Path: Deep Dive
+
+<img src="/images/arch_router_paper_preview.png" alt="Agent Router Architecture" />
+
+### Filter Chain Execution
+
+**File:** `brightstaff/src/handlers/pipeline_processor.rs`
+
+Filter chains are programmable dataplane steps that execute **before** the agent sees the prompt:
+
+```
+prompt ──► [input_guards] ──► [query_rewrite] ──► [context_builder] ──► agent
+           guardrails       prompt mutation      RAG / enrichment
+```
+
+Each filter:
+- Can be HTTP or MCP (Model Context Protocol)
+- Can mutate, enrich, or short-circuit the request
+- Runs as an independent service called by brightstaff
+- Executed sequentially in the order defined in config
+
+<Note>
+  Filter chains are reusable - the same guardrail service can be wired into multiple agents.
+</Note>
+
+### Agent Orchestrator
+
+**File:** `brightstaff/src/handlers/agent_chat_completions.rs`
+
+After filter chains complete, the orchestrator:
+
+1. **Selects the agent** based on routing strategy (round-robin, semantic, or explicit)
+2. **Forwards the enriched request** to the agent's configured URL
+3. **Manages conversation state** (stores in memory or PostgreSQL via `/v1/responses` API)
+4. **Streams the response** back to the client with proper chunking
+5. **Injects tracing context** (OpenTelemetry `traceparent` headers)
+
+## LLM Path: Deep Dive
+
+### Model Router
+
+**Files:** `brightstaff/src/router/llm_router.rs`, `brightstaff/src/handlers/router_chat.rs`
+
+The model router resolves aliases and selects providers:
+
+<Steps>
+  <Step title="Alias Resolution">
+    Translate shorthand model names:
+    
+    - `fast-llm` → `gpt-4o-mini`
+    - `smart-llm` → `gpt-4o`
+    - Custom aliases defined in config
+  </Step>
+  
+  <Step title="Preference-Based Selection">
+    Choose provider based on:
+    
+    - Cost optimization
+    - Latency requirements
+    - Fallback chains (primary → secondary)
+    - Geographic routing
+  </Step>
+  
+  <Step title="Format Translation">
+    Convert to provider-specific format using `hermesllm` library (handled in llm_gateway.wasm)
+  </Step>
+</Steps>
+
+### LLM Gateway Filter (WASM)
+
+**File:** `crates/llm_gateway/src/lib.rs`
+
+The `llm_gateway.wasm` filter runs **inside Envoy** on the egress path:
+
+<CardGroup cols={2}>
+  <Card title="Rate Limiting" icon="gauge">
+    Per-provider token bucket limiting to prevent overload and stay within quotas
+  </Card>
+  
+  <Card title="Format Translation" icon="language">
+    OpenAI → Anthropic, Gemini, Mistral, Groq, DeepSeek, xAI, Bedrock formats via `hermesllm`
+  </Card>
+  
+  <Card title="TTFT Metrics" icon="clock">
+    Time-to-first-token measurement for streaming responses
+  </Card>
+  
+  <Card title="Token Counting" icon="calculator">
+    Input/output token usage tracking per provider
+  </Card>
+</CardGroup>
+
+<Info>
+  Because the filter runs in-process with Envoy, there's **zero network hop** overhead for format translation.
+</Info>
+
+## Always-On Subsystems
+
+These run on **every request** regardless of path:
+
+### Signals Analyzer
+
+**File:** `brightstaff/src/signals/`
+
+- **Loop detection** - Identifies circular agent call patterns
+- **Repetition scoring** - Detects low-quality repetitive outputs
+- **Quality indicators** - Flags potential hallucinations or errors
+
+### State Storage
+
+**Files:** `brightstaff/src/state/memory.rs`, `brightstaff/src/state/postgresql.rs`
+
+Conversation state management via `/v1/responses` API:
+
+- **In-memory** - `MemoryConversationalStorage` for development/testing
+- **PostgreSQL** - `PostgreSQLConversationStorage` for production
+- **Stateful API** - OpenAI-compatible responses endpoint for multi-turn conversations
+
+### OpenTelemetry Tracing
+
+**File:** `brightstaff/src/tracing/`
+
+- **Traceparent injection** - W3C trace context propagation
+- **Span creation** - Per-request, per-filter, per-LLM-call spans
+- **Trace export** - OTLP gRPC to Jaeger, Zipkin, or any OTEL collector
+
+<Tip>
+  Use `planoai trace` CLI command to visualize request traces and debug performance issues.
+</Tip>
+
+## Egress Flow: LLM Requests
+
+### 1. HTTP Connection to LLM
+
+Plano (via Envoy) initiates an HTTPS connection to the upstream LLM service:
+
+- **TLS origination** - Envoy handles certificate validation and SNI
+- **Connection pooling** - Reuses persistent connections per worker thread
+- **DNS resolution** - LOGICAL_DNS cluster type with TTL-based refresh
+
+### 2. Rate Limiting
+
+**Implementation:** `llm_gateway.wasm` filter
+
+Before sending the request:
+
+- Check token bucket for the specific provider
+- Enforce per-client or per-service limits
+- Return `429 Too Many Requests` if exceeded
+- Update rate limit headers in response
+
+### 3. Request Transformation
+
+**Implementation:** `hermesllm` library in `llm_gateway.wasm`
+
+Normalize the request into provider-specific format:
+
+```rust
+// Translate OpenAI format to Anthropic format
+let request = ProviderRequestType::try_from((
+    request_bytes.as_bytes(),
+    &ProviderId::Anthropic
+))?;
+```
+
+Supported providers:
+- OpenAI, Anthropic, Gemini, Mistral, Groq, DeepSeek, xAI (Grok)
+- Together.ai, AWS Bedrock, Azure OpenAI, GitHub Models
+
+### 4. Load Balancing
+
+If multiple LLM endpoints are configured:
+
+- **Round-robin** - Default Envoy load balancing
+- **Least request** - Route to least-loaded endpoint
+- **Health checks** - Circuit breakers prevent routing to unhealthy instances
+
+### 5. Response Reception
+
+Once the LLM processes the prompt:
+
+<Steps>
+  <Step title="Receive Response">
+    Envoy receives HTTP response (streaming or complete)
+  </Step>
+  
+  <Step title="Format Translation">
+    `llm_gateway.wasm` converts provider format back to normalized format
+  </Step>
+  
+  <Step title="Metrics Collection">
+    Extract token usage, latency, model info from response
+  </Step>
+  
+  <Step title="Forward to Client">
+    Stream or send complete response downstream
+  </Step>
+</Steps>
+
+## Post-Request Processing
+
+Once a request completes, the stream is destroyed and several cleanup tasks occur:
+
+### Monitoring Updates
+
+**File:** `crates/prompt_gateway/src/metrics.rs`
+
+- Request duration histograms
+- Active request gauges
+- Success/error counters
+- Token usage summaries
+
+Stats are batched and written by the main thread periodically.
+
+### Access Logs
+
+**Configuration:** Generated via `config/envoy.template.yaml`
+
+Structured JSON logs written to `/var/log/access_*.log`:
+
+```json
+{
+  "timestamp": "2026-02-28T10:00:00Z",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 200,
+  "duration_ms": 342,
+  "upstream_service": "openai",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+}
+```
+
+### Trace Finalization
+
+If the request was traced:
+
+- The HTTP connection manager finalizes the root span
+- Child spans (filter chains, LLM calls, agent calls) are closed
+- Complete trace is exported via OTLP to configured endpoint
+- Trace ID can be used to correlate with application logs
+
+## Error Handling
+
+Errors encountered during processing are forwarded to designated error targets:
+
+### Error Headers
+
+- `X-Function-Error-Code` - Function call error type
+- `X-Prompt-Guard-Error-Code` - Guardrail violation details
+- `X-Error-Message` - Human-readable error description
+- `X-Error-Timestamp` - When the error occurred
+
+### Error Targets
+
+**Configuration:** Define fallback endpoints in `plano_config.yaml`
+
+Errors can trigger:
+- Logging to observability platforms
+- Notifications via webhooks
+- Fallback to alternative agents/models
+- Circuit breaker activation
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Non-blocking I/O" icon="bolt">
+    100% async execution - no thread blocking on network calls
+  </Card>
+  
+  <Card title="Zero-copy Streaming" icon="stream">
+    Direct memory-mapped buffers for streaming responses
+  </Card>
+  
+  <Card title="In-process Filters" icon="microchip">
+    WASM filters run inside Envoy with nanosecond overhead
+  </Card>
+  
+  <Card title="Thread Affinity" icon="link">
+    Each connection pinned to one worker - no lock contention
+  </Card>
+</CardGroup>
+
+<Warning>
+  For optimal performance, set worker threads equal to CPU cores. Oversubscription can degrade throughput.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Components" icon="cube" href="/architecture/components">
+    Understand each Rust crate and its responsibilities
+  </Card>
+  
+  <Card title="Envoy Integration" icon="diagram-nested" href="/architecture/envoy-integration">
+    Learn how WASM filters extend Envoy
+  </Card>
+  
+  <Card title="Observability" icon="chart-line" href="/observability/tracing">
+    Set up tracing and monitoring
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure listeners, agents, and routing
+  </Card>
+</CardGroup>

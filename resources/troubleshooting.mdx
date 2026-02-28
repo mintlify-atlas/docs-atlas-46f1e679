@@ -1,0 +1,607 @@
+---
+title: "Troubleshooting"
+description: "Common issues and solutions when working with Plano"
+---
+
+This guide covers common issues you might encounter when using Plano and how to resolve them.
+
+## Installation & Setup
+
+<AccordionGroup>
+  <Accordion title="Docker container fails to start" icon="docker">
+    **Symptoms:**
+    - `planoai up` fails with container errors
+    - "plano is not running" messages
+    - Health check failures
+
+    **Solutions:**
+
+    1. Check Docker is running:
+       ```bash
+       docker ps
+       ```
+
+    2. Verify your config file is valid:
+       ```bash
+       planoai up --service plano --foreground
+       ```
+       Look for validation errors in the output.
+
+    3. Check for port conflicts:
+       ```bash
+       # Default ports: 8001, 12000, 12001
+       lsof -i :8001
+       lsof -i :12000
+       ```
+
+    4. View container logs:
+       ```bash
+       planoai logs
+       # Or directly:
+       docker logs plano
+       ```
+
+    5. Try rebuilding the image:
+       ```bash
+       planoai down
+       planoai build
+       planoai up
+       ```
+  </Accordion>
+
+  <Accordion title="'planoai' command not found" icon="terminal">
+    **Symptoms:**
+    - Shell doesn't recognize `planoai` command
+
+    **Solutions:**
+
+    1. If installed with `uv`:
+       ```bash
+       # Use via uv:
+       uvx planoai --help
+       
+       # Or activate the virtual environment:
+       cd cli
+       source .venv/bin/activate
+       planoai --help
+       ```
+
+    2. If installed with `pip`:
+       ```bash
+       # Install from source:
+       cd cli
+       pip install -e .
+       ```
+
+    3. Check your PATH includes Python scripts directory
+  </Accordion>
+
+  <Accordion title="Config validation fails" icon="file-exclamation">
+    **Symptoms:**
+    - `Error validating plano_config file`
+    - Schema validation errors
+
+    **Solutions:**
+
+    1. Validate your YAML syntax:
+       ```bash
+       # Check for YAML syntax errors
+       python -c "import yaml; yaml.safe_load(open('config.yaml'))"
+       ```
+
+    2. Common config mistakes:
+       - Missing required fields (`version`, `agents`, `listeners`)
+       - Invalid port numbers (must be integers)
+       - Incorrect indentation (use spaces, not tabs)
+       - Missing `model_providers` when using LLM routing
+
+    3. Compare against working examples:
+       ```bash
+       # Check demo configs
+       cat demos/getting_started/llm_gateway/config.yaml
+       ```
+
+    4. Verify schema compliance:
+       ```bash
+       # Use the validation script
+       config/validate_plano_config.sh config.yaml
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## API Keys & Authentication
+
+<AccordionGroup>
+  <Accordion title="LLM provider authentication fails" icon="key">
+    **Symptoms:**
+    - "Invalid API key" errors
+    - 401 Unauthorized responses
+    - Provider-specific authentication errors
+
+    **Solutions:**
+
+    1. Verify API keys are set:
+       ```bash
+       echo $OPENAI_API_KEY
+       echo $ANTHROPIC_API_KEY
+       ```
+
+    2. Check keys are properly referenced in `config.yaml`:
+       ```yaml
+       model_providers:
+         - model: openai/gpt-4o
+           access_key: $OPENAI_API_KEY  # Must match env var
+           default: true
+       ```
+
+    3. For Docker environments, ensure env vars are passed:
+       ```yaml
+       # docker-compose.yml
+       services:
+         agent:
+           environment:
+             - OPENAI_API_KEY=${OPENAI_API_KEY}
+       ```
+
+    4. Test key directly:
+       ```bash
+       curl https://api.openai.com/v1/models \
+         -H "Authorization: Bearer $OPENAI_API_KEY"
+       ```
+  </Accordion>
+
+  <Accordion title="API key not found in environment" icon="circle-exclamation">
+    **Symptoms:**
+    - Plano can't find environment variable referenced in config
+
+    **Solutions:**
+
+    1. Create a `.env` file in your project:
+       ```bash
+       # .env
+       OPENAI_API_KEY=sk-...
+       ANTHROPIC_API_KEY=sk-ant-...
+       ```
+
+    2. Export before starting Plano:
+       ```bash
+       export OPENAI_API_KEY="sk-..."
+       planoai up
+       ```
+
+    3. For demos using docker-compose:
+       ```bash
+       # The .env file is automatically loaded
+       docker compose up
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Agent Orchestration
+
+<AccordionGroup>
+  <Accordion title="Requests not routing to agents" icon="route">
+    **Symptoms:**
+    - Plano receives request but doesn't forward to agents
+    - "No agent matched" errors
+    - Wrong agent handles request
+
+    **Solutions:**
+
+    1. Check agent descriptions are clear and specific:
+       ```yaml
+       agents:
+         - id: weather_agent
+           description: |
+             Gets real-time weather and forecasts for any city.
+             Handles: "weather in Tokyo", "forecast for Paris"
+       ```
+
+    2. Verify agents are reachable:
+       ```bash
+       # Test agent directly
+       curl http://localhost:10510/v1/chat/completions \
+         -H "Content-Type: application/json" \
+         -d '{"messages": [{"role": "user", "content": "test"}]}'
+       ```
+
+    3. Check Plano logs for routing decisions:
+       ```bash
+       planoai logs | grep "router response"
+       ```
+
+    4. For Docker-based agents, use correct host:
+       ```yaml
+       agents:
+         - id: my_agent
+           url: http://host.docker.internal:10510  # Not localhost!
+       ```
+
+    5. Verify the router is configured:
+       ```yaml
+       listeners:
+         - type: agent
+           router: plano_orchestrator_v1  # Required for orchestration
+       ```
+  </Accordion>
+
+  <Accordion title="Agent returns 404 or connection refused" icon="circle-xmark">
+    **Symptoms:**
+    - Plano can't connect to agent
+    - Connection refused errors
+
+    **Solutions:**
+
+    1. Verify agent is running:
+       ```bash
+       # Check if port is listening
+       lsof -i :10510
+       # Or for Docker:
+       docker ps | grep agent
+       ```
+
+    2. Check URL matches agent's listen port:
+       ```python
+       # In your agent code:
+       if __name__ == "__main__":
+           uvicorn.run(app, host="0.0.0.0", port=10510)  # Must match config
+       ```
+
+    3. For Docker networking:
+       ```yaml
+       # Agent in separate container needs host.docker.internal
+       agents:
+         - id: my_agent
+           url: http://host.docker.internal:10510
+       
+       # Or use Docker network names
+       agents:
+         - id: my_agent
+           url: http://weather_agent:10510
+       ```
+
+    4. Test endpoint manually:
+       ```bash
+       curl -v http://localhost:10510/v1/chat/completions
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Model Routing
+
+<AccordionGroup>
+  <Accordion title="Model alias not recognized" icon="tag">
+    **Symptoms:**
+    - "Unknown model" errors when using aliases
+    - Alias doesn't resolve to target model
+
+    **Solutions:**
+
+    1. Verify alias is defined in config:
+       ```yaml
+       model_aliases:
+         arch.summarize.v1:
+           target: gpt-4o-mini
+       ```
+
+    2. Check target model exists in `model_providers`:
+       ```yaml
+       model_providers:
+         - model: openai/gpt-4o-mini  # Match prefix
+           access_key: $OPENAI_API_KEY
+       ```
+
+    3. Restart Plano after config changes:
+       ```bash
+       planoai down
+       planoai up
+       ```
+  </Accordion>
+
+  <Accordion title="Wrong model handles request" icon="shuffle">
+    **Symptoms:**
+    - Expected model A, got response from model B
+    - Preference routing not working
+
+    **Solutions:**
+
+    1. Check logs to see routing decision:
+       ```bash
+       planoai logs | grep "router response"
+       ```
+
+    2. For preference-based routing, verify route definitions:
+       ```yaml
+       listeners:
+         - type: model
+           router: plano_preference_v1
+           routes:
+             - id: code_generation
+               description: "Generate new code"
+               providers:
+                 - model: openai/gpt-4o
+       ```
+
+    3. Test with explicit model override:
+       ```bash
+       curl -H 'x-arch-llm-provider-hint: openai/gpt-4o' \
+         http://localhost:12000/v1/chat/completions
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Observability & Tracing
+
+<AccordionGroup>
+  <Accordion title="Traces not appearing in Jaeger" icon="chart-line">
+    **Symptoms:**
+    - Jaeger UI shows no traces
+    - Missing spans or incomplete traces
+
+    **Solutions:**
+
+    1. Verify Jaeger is running:
+       ```bash
+       curl http://localhost:16686
+       ```
+
+    2. Check tracing is enabled in config:
+       ```yaml
+       tracing:
+         random_sampling: 100  # Sample 100% of requests
+       ```
+
+    3. Ensure OTLP endpoint is reachable:
+       ```bash
+       # Default: http://localhost:4317
+       curl http://localhost:4317
+       ```
+
+    4. For Docker setups, verify network connectivity:
+       ```yaml
+       # docker-compose.yml
+       services:
+         plano:
+           environment:
+             - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+       ```
+
+    5. Check for trace export errors in logs:
+       ```bash
+       planoai logs | grep -i trace
+       ```
+  </Accordion>
+
+  <Accordion title="Trace listener port already in use" icon="network-wired">
+    **Symptoms:**
+    - `planoai trace` fails with bind error
+    - Port 8889 already in use
+
+    **Solutions:**
+
+    1. Find and kill process using the port:
+       ```bash
+       lsof -i :8889
+       kill <PID>
+       ```
+
+    2. Specify different port:
+       ```bash
+       planoai trace --port 8890
+       ```
+
+    3. Check for lingering planoai processes:
+       ```bash
+       ps aux | grep planoai
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Issues
+
+<AccordionGroup>
+  <Accordion title="Slow response times" icon="clock">
+    **Symptoms:**
+    - Requests take longer than expected
+    - Timeouts occur
+
+    **Solutions:**
+
+    1. Check Jaeger traces to identify bottlenecks:
+       - Open http://localhost:16686
+       - Find your request trace
+       - Look for spans with long durations
+
+    2. Common causes:
+       - Cold start of agents (first request is slower)
+       - Network latency to LLM providers
+       - Large context windows
+       - Multiple agent hops
+
+    3. Optimize agent responses:
+       - Use streaming for better perceived performance
+       - Cache expensive computations
+       - Reduce context size when possible
+
+    4. Use faster models for routing:
+       ```yaml
+       listeners:
+         - type: agent
+           router: plano_orchestrator_v1  # Fast 4B parameter model
+       ```
+  </Accordion>
+
+  <Accordion title="High memory usage" icon="memory">
+    **Symptoms:**
+    - Container uses excessive memory
+    - System becomes slow
+
+    **Solutions:**
+
+    1. Check container resource usage:
+       ```bash
+       docker stats plano
+       ```
+
+    2. Limit container memory:
+       ```yaml
+       # docker-compose.yml
+       services:
+         plano:
+           mem_limit: 2g
+       ```
+
+    3. Reduce concurrent requests
+    4. Check for memory leaks in custom agents
+  </Accordion>
+</AccordionGroup>
+
+## Filter Chains
+
+<AccordionGroup>
+  <Accordion title="Filter not being called" icon="filter">
+    **Symptoms:**
+    - Filter code doesn't execute
+    - Request bypasses filter
+
+    **Solutions:**
+
+    1. Verify filter is in listener config:
+       ```yaml
+       listeners:
+         - type: agent
+           filters:
+             - input_guards  # Must reference filter id
+       ```
+
+    2. Check filter is defined:
+       ```yaml
+       filters:
+         - id: input_guards
+           url: http://host.docker.internal:10500
+       ```
+
+    3. Verify filter server is running:
+       ```bash
+       curl http://localhost:10500/health
+       ```
+
+    4. Check logs for filter errors:
+       ```bash
+       planoai logs | grep input_guards
+       ```
+  </Accordion>
+
+  <Accordion title="MCP filter connection errors" icon="plug">
+    **Symptoms:**
+    - Can't connect to MCP server
+    - Protocol errors
+
+    **Solutions:**
+
+    1. Verify MCP server is running:
+       ```bash
+       docker ps | grep mcp
+       ```
+
+    2. Check transport type matches:
+       ```yaml
+       filters:
+         - id: my_filter
+           type: mcp
+           transport: streamable-http  # Must match server
+       ```
+
+    3. Test MCP endpoint directly:
+       ```bash
+       curl http://localhost:10500/mcp/tools
+       ```
+
+    4. Verify tool name:
+       ```yaml
+       filters:
+         - id: my_filter
+           tool: input_guards  # Must match MCP tool name
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Development & Testing
+
+<AccordionGroup>
+  <Accordion title="Pre-commit hooks fail" icon="git">
+    **Symptoms:**
+    - Commit blocked by pre-commit checks
+    - Formatting or linting errors
+
+    **Solutions:**
+
+    1. Run checks manually to see details:
+       ```bash
+       pre-commit run --all-files
+       ```
+
+    2. Common fixes:
+       - **Rust formatting**: `cd crates && cargo fmt --all`
+       - **Python formatting**: `cd cli && black .`
+       - **YAML validation**: Check syntax in config files
+
+    3. Run specific tests:
+       ```bash
+       cd crates && cargo test --lib
+       cd cli && uv run pytest -v
+       ```
+  </Accordion>
+
+  <Accordion title="E2E tests fail" icon="flask">
+    **Symptoms:**
+    - Tests in `tests/e2e/` fail
+
+    **Solutions:**
+
+    1. Ensure Docker image is built:
+       ```bash
+       docker build -t katanemo/plano:latest .
+       ```
+
+    2. Verify API keys are set:
+       ```bash
+       export OPENAI_API_KEY="sk-..."
+       export ANTHROPIC_API_KEY="sk-ant-..."
+       ```
+
+    3. Run specific test suite:
+       ```bash
+       cd tests/e2e
+       python test_prompt_gateway.py
+       ```
+
+    4. Check for port conflicts (tests use 12000, 12001)
+  </Accordion>
+</AccordionGroup>
+
+## Getting Help
+
+<Card
+  title="Join our Discord"
+  icon="discord"
+  href="https://discord.gg/pGZf2gcwEc"
+>
+  Get help from the Plano community and maintainers
+</Card>
+
+<Card
+  title="Report an Issue"
+  icon="github"
+  href="https://github.com/katanemo/plano/issues"
+>
+  File a bug report or feature request on GitHub
+</Card>
+
+<Tip>
+  When asking for help, include:
+  - Plano version (`planoai --version`)
+  - Your `config.yaml` (remove API keys)
+  - Relevant logs from `planoai logs`
+  - Steps to reproduce the issue
+</Tip>

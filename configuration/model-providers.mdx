@@ -1,0 +1,686 @@
+---
+title: Model Providers
+description: Configure LLM providers and intelligent routing in Plano
+---
+
+Model providers define the LLM services that Plano can route requests to. Plano supports all major LLM providers including OpenAI, Anthropic, Google Gemini, Mistral, Groq, DeepSeek, xAI (Grok), and custom providers.
+
+## Configuration
+
+Model providers are defined in the `model_providers` array:
+
+```yaml
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+```
+
+## Parameters
+
+<ParamField path="model" type="string" required>
+  The model identifier in the format `provider/model-name`.
+  
+  **Format:** `<provider>/<model-name>`
+  
+  **Supported providers:**
+  - `openai` - OpenAI models
+  - `anthropic` - Anthropic Claude models
+  - `gemini` - Google Gemini models
+  - `mistral` - Mistral AI models
+  - `groq` - Groq models
+  - `deepseek` - DeepSeek models
+  - `xai` - xAI (Grok) models
+  - `together_ai` - Together AI models
+  - `azure_openai` - Azure OpenAI Service
+  - `amazon_bedrock` - AWS Bedrock models
+  - `ollama` - Ollama (local) models
+  - `custom` or any provider name - Custom provider with `provider_interface`
+  
+  **Wildcard support:** Use `provider/*` to match all models from a provider
+  
+  **Examples:**
+  - `openai/gpt-4o`
+  - `anthropic/claude-sonnet-4-20250514`
+  - `openai/*` (matches all OpenAI models)
+</ParamField>
+
+<ParamField path="access_key" type="string">
+  The API key for authenticating with the provider. Supports environment variable substitution.
+  
+  **Format:** `$ENV_VAR` or `${ENV_VAR}`
+  
+  **Examples:**
+  - `$OPENAI_API_KEY`
+  - `${ANTHROPIC_API_KEY}`
+  - Direct key (not recommended): `sk-...`
+  
+  <Warning>
+    Not required when `passthrough_auth: true` is set. In that case, the client's Authorization header is forwarded to the upstream provider.
+  </Warning>
+</ParamField>
+
+<ParamField path="default" type="boolean">
+  Whether this model should be used when no specific model is requested.
+  
+  **Default:** `false`
+  
+  Only one model provider should have `default: true`.
+</ParamField>
+
+<ParamField path="base_url" type="string">
+  Custom base URL for the provider API. Required for custom providers, Azure OpenAI, self-hosted models, or proxies.
+  
+  **Examples:**
+  - `https://api.openai.com/v1` (OpenAI default)
+  - `https://katanemo.openai.azure.com` (Azure OpenAI)
+  - `https://bedrock-runtime.us-west-2.amazonaws.com` (AWS Bedrock)
+  - `http://host.docker.internal:11434` (Ollama)
+  - `https://litellm.example.com` (LiteLLM proxy)
+</ParamField>
+
+<ParamField path="provider_interface" type="string">
+  The API protocol to use when communicating with this provider. Required when using custom providers or non-standard endpoints.
+  
+  **Options:**
+  - `openai` - OpenAI-compatible API
+  - `anthropic` - Anthropic Claude API
+  - `claude` - Alias for `anthropic`
+  - `gemini` - Google Gemini API
+  - `mistral` - Mistral AI API
+  - `groq` - Groq API
+  - `deepseek` - DeepSeek API
+  - `arch` - Arch-compatible API
+  
+  <Info>
+    Most providers are auto-detected from the model name. Only specify this when using a custom provider or non-standard endpoint.
+  </Info>
+</ParamField>
+
+<ParamField path="passthrough_auth" type="boolean">
+  When `true`, forwards the client's Authorization header to the upstream provider instead of using the configured `access_key`.
+  
+  **Default:** `false`
+  
+  **Use cases:**
+  - Routing to LiteLLM with virtual keys
+  - Routing to OpenRouter with user keys
+  - Routing to other LLM proxies that validate their own keys
+  
+  <Warning>
+    When `passthrough_auth: true`, the `access_key` field is ignored. Plano will log a warning if both are set.
+  </Warning>
+</ParamField>
+
+<ParamField path="http_host" type="string">
+  Custom HTTP Host header to send with requests. Useful for routing through proxies or load balancers.
+  
+  **Example:** `api.openai.com`
+</ParamField>
+
+<ParamField path="name" type="string">
+  Optional friendly name for this provider configuration. Useful when configuring multiple instances of the same model.
+  
+  **Example:** `primary-gpt4`, `fallback-claude`
+</ParamField>
+
+<ParamField path="routing_preferences" type="array">
+  Semantic routing preferences that help Plano intelligently select this model based on task characteristics.
+  
+  Each preference has:
+  - `name` (required) - Short preference identifier
+  - `description` (required) - Detailed description of when to use this model
+  
+  See [Preference-Based Routing](#preference-based-routing) for details.
+</ParamField>
+
+## Supported Providers
+
+<Tabs>
+  <Tab title="OpenAI">
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        default: true
+      
+      - model: openai/gpt-4o-mini
+        access_key: $OPENAI_API_KEY
+      
+      - model: openai/o3
+        access_key: $OPENAI_API_KEY
+      
+      # Match all OpenAI models
+      - model: openai/*
+        access_key: $OPENAI_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Anthropic">
+    ```yaml
+    model_providers:
+      - model: anthropic/claude-sonnet-4-20250514
+        access_key: $ANTHROPIC_API_KEY
+        default: true
+      
+      - model: anthropic/claude-3-haiku-20240307
+        access_key: $ANTHROPIC_API_KEY
+      
+      # Match all Anthropic models
+      - model: anthropic/*
+        access_key: $ANTHROPIC_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Google Gemini">
+    ```yaml
+    model_providers:
+      - model: gemini/gemini-1.5-pro-latest
+        access_key: $GEMINI_API_KEY
+      
+      - model: gemini/gemini-1.5-flash
+        access_key: $GEMINI_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Mistral">
+    ```yaml
+    model_providers:
+      - model: mistral/ministral-3b-latest
+        access_key: $MISTRAL_API_KEY
+      
+      - model: mistral/mistral-large-latest
+        access_key: $MISTRAL_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Groq">
+    ```yaml
+    model_providers:
+      - model: groq/llama-3.1-8b-instant
+        access_key: $GROQ_API_KEY
+      
+      - model: groq/llama-3.2-3b-preview
+        access_key: $GROQ_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="DeepSeek">
+    ```yaml
+    model_providers:
+      - model: deepseek/deepseek-reasoner
+        access_key: $DEEPSEEK_API_KEY
+      
+      - model: deepseek/deepseek-chat
+        access_key: $DEEPSEEK_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="xAI (Grok)">
+    ```yaml
+    model_providers:
+      - model: xai/grok-4-latest
+        access_key: $GROK_API_KEY
+      
+      - model: xai/grok-4-0709
+        access_key: $GROK_API_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Together AI">
+    ```yaml
+    model_providers:
+      - model: together_ai/openai/gpt-oss-20b
+        access_key: $TOGETHER_API_KEY
+    ```
+  </Tab>
+</Tabs>
+
+## Cloud Provider Integration
+
+<Tabs>
+  <Tab title="Azure OpenAI">
+    ```yaml
+    model_providers:
+      - model: azure_openai/gpt-5-mini
+        access_key: $AZURE_API_KEY
+        base_url: https://katanemo.openai.azure.com
+      
+      - model: azure_openai/gpt-4o
+        access_key: $AZURE_API_KEY
+        base_url: https://katanemo.openai.azure.com
+    ```
+    
+    <Note>
+      For Azure OpenAI, the `base_url` must point to your Azure OpenAI resource endpoint.
+    </Note>
+  </Tab>
+  
+  <Tab title="AWS Bedrock">
+    ```yaml
+    model_providers:
+      - model: amazon_bedrock/us.amazon.nova-premier-v1:0
+        access_key: $AWS_BEARER_TOKEN_BEDROCK
+        base_url: https://bedrock-runtime.us-west-2.amazonaws.com
+      
+      - model: amazon_bedrock/us.amazon.nova-pro-v1:0
+        access_key: $AWS_BEARER_TOKEN_BEDROCK
+        base_url: https://bedrock-runtime.us-west-2.amazonaws.com
+    ```
+    
+    <Info>
+      For AWS Bedrock, use a bearer token for authentication and specify your region's Bedrock endpoint.
+    </Info>
+  </Tab>
+  
+  <Tab title="Ollama (Local)">
+    ```yaml
+    model_providers:
+      - model: ollama/llama3.1
+        base_url: http://host.docker.internal:11434
+        default: true
+      
+      - model: ollama/mistral
+        base_url: http://host.docker.internal:11434
+    ```
+    
+    <Tip>
+      Ollama doesn't require an API key. Just specify the base URL where Ollama is running.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Custom Providers
+
+Plano can route to any OpenAI-compatible API using custom providers:
+
+```yaml
+model_providers:
+  # Custom provider with OpenAI-compatible API
+  - model: custom/test-model
+    base_url: http://host.docker.internal:11223
+    provider_interface: openai
+    access_key: $CUSTOM_API_KEY
+  
+  # Custom provider name with Ollama
+  - model: my_llm_provider/llama3.2
+    provider_interface: openai
+    base_url: http://host.docker.internal:11434
+```
+
+<Info>
+  For custom providers, you must specify `provider_interface` to indicate which API protocol to use.
+</Info>
+
+## Passthrough Authentication
+
+Use passthrough authentication to forward client API keys to upstream services:
+
+```yaml
+model_providers:
+  # Forward client's Authorization header to LiteLLM
+  - model: openai/gpt-4o
+    base_url: https://litellm.example.com
+    passthrough_auth: true
+    default: true
+  
+  # Works with any LLM proxy that validates its own keys
+  - model: openai/gpt-4o-mini
+    base_url: https://openrouter.ai/api/v1
+    passthrough_auth: true
+```
+
+<Warning>
+  When using `passthrough_auth: true`, clients must provide their own API keys in the Authorization header. Plano will not inject any access_key.
+</Warning>
+
+**Use case example:**
+```bash
+# Client provides their own LiteLLM virtual key
+curl http://localhost:12000/v1/chat/completions \
+  -H "Authorization: Bearer sk-litellm-virtual-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+## Preference-Based Routing
+
+Plano can intelligently route requests based on semantic preferences:
+
+```yaml
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: code understanding
+        description: understand and explain existing code snippets, functions, or libraries
+  
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+    routing_preferences:
+      - name: code generation
+        description: generating new code snippets, functions, or boilerplate based on user prompts or requirements
+```
+
+### How It Works
+
+<Steps>
+  <Step title="Analyze Request">
+    Plano analyzes the user's request to understand the task type
+  </Step>
+  <Step title="Match Preferences">
+    Compares the task against all `routing_preferences` descriptions
+  </Step>
+  <Step title="Select Model">
+    Routes to the model whose preferences best match the request
+  </Step>
+  <Step title="Fallback to Default">
+    Uses the default model if no preferences match
+  </Step>
+</Steps>
+
+<Info>
+  Preference-based routing is most effective with 2-5 models, each with clear, distinct preferences.
+</Info>
+
+## Model Aliases
+
+Create friendly aliases that map to specific models:
+
+```yaml
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+
+model_aliases:
+  # Task-based aliases
+  fast-llm:
+    target: gpt-4o-mini
+  smart-llm:
+    target: gpt-4o
+  creative-llm:
+    target: claude-sonnet-4-20250514
+  
+  # Semantic aliases
+  arch.summarize.v1:
+    target: gpt-4o-mini
+  arch.reasoning.v1:
+    target: gpt-4o
+  arch.creative.v1:
+    target: claude-sonnet-4-20250514
+```
+
+Clients can then request models by alias:
+
+```bash
+curl http://localhost:12000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "fast-llm", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+<Tip>
+  Aliases let you change underlying models without updating client code. For example, switch `fast-llm` from `gpt-4o-mini` to `claude-haiku` without changing any clients.
+</Tip>
+
+## Complete Examples
+
+### Multi-Provider Setup
+
+```yaml
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+    max_retries: 3
+
+model_providers:
+  # OpenAI models
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/*
+    access_key: $OPENAI_API_KEY
+  
+  # Anthropic models
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+  - model: anthropic/claude-3-haiku-20240307
+    access_key: $ANTHROPIC_API_KEY
+  
+  # Google Gemini
+  - model: gemini/gemini-1.5-pro-latest
+    access_key: $GEMINI_API_KEY
+  
+  # Mistral
+  - model: mistral/ministral-3b-latest
+    access_key: $MISTRAL_API_KEY
+  
+  # Groq
+  - model: groq/llama-3.1-8b-instant
+    access_key: $GROQ_API_KEY
+  
+  # DeepSeek
+  - model: deepseek/deepseek-reasoner
+    access_key: $DEEPSEEK_API_KEY
+  
+  # xAI Grok
+  - model: xai/grok-4-latest
+    access_key: $GROK_API_KEY
+  
+  # Together AI
+  - model: together_ai/openai/gpt-oss-20b
+    access_key: $TOGETHER_API_KEY
+
+tracing:
+  random_sampling: 100
+```
+
+### Cloud Providers with Aliases
+
+```yaml
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+
+model_providers:
+  # OpenAI
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+  
+  # Azure OpenAI
+  - model: azure_openai/gpt-5-mini
+    access_key: $AZURE_API_KEY
+    base_url: https://katanemo.openai.azure.com
+  
+  # AWS Bedrock
+  - model: amazon_bedrock/us.amazon.nova-premier-v1:0
+    access_key: $AWS_BEARER_TOKEN_BEDROCK
+    base_url: https://bedrock-runtime.us-west-2.amazonaws.com
+  
+  # Ollama (local)
+  - model: ollama/llama3.1
+    base_url: http://host.docker.internal:11434
+
+model_aliases:
+  # Environment-specific aliases
+  production-model:
+    target: gpt-4o
+  staging-model:
+    target: gpt-4o-mini
+  local-model:
+    target: llama3.1
+  
+  # Task-specific aliases
+  chat-model:
+    target: gpt-4o-mini
+  coding-model:
+    target: us.amazon.nova-premier-v1:0
+  creative-model:
+    target: gpt-4o
+
+tracing:
+  random_sampling: 100
+```
+
+## Legacy Format (Deprecated)
+
+<Warning>
+  The `llm_providers` key is deprecated. Use `model_providers` instead in `v0.3.0` configurations.
+</Warning>
+
+```yaml
+# Old format (deprecated)
+llm_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+
+# New format (recommended)
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use environment variables for API keys">
+    Never hardcode API keys in configuration files:
+    
+    ✅ **Good:**
+    ```yaml
+    access_key: $OPENAI_API_KEY
+    ```
+    
+    ❌ **Bad:**
+    ```yaml
+    access_key: sk-proj-1234567890abcdef
+    ```
+  </Accordion>
+  
+  <Accordion title="Set a default model">
+    Always designate one model as the default:
+    
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o-mini
+        access_key: $OPENAI_API_KEY
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        default: true  # This model is used when none specified
+    ```
+  </Accordion>
+  
+  <Accordion title="Use wildcards for provider flexibility">
+    Allow clients to request any model from a provider:
+    
+    ```yaml
+    model_providers:
+      - model: openai/*
+        access_key: $OPENAI_API_KEY
+      - model: anthropic/*
+        access_key: $ANTHROPIC_API_KEY
+    ```
+  </Accordion>
+  
+  <Accordion title="Leverage model aliases">
+    Use aliases to decouple client code from specific models:
+    
+    ```yaml
+    model_aliases:
+      prod-chat:
+        target: gpt-4o
+      dev-chat:
+        target: gpt-4o-mini
+    ```
+    
+    This lets you change models without updating clients.
+  </Accordion>
+  
+  <Accordion title="Write clear routing preferences">
+    For preference-based routing, write specific descriptions:
+    
+    ✅ **Good:**
+    ```yaml
+    routing_preferences:
+      - name: technical writing
+        description: Writing detailed technical documentation, API references, and how-to guides with precise terminology
+    ```
+    
+    ❌ **Bad:**
+    ```yaml
+    routing_preferences:
+      - name: writing
+        description: good at writing
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Authentication errors">
+  If you see authentication errors:
+  
+  1. Verify environment variables are set:
+     ```bash
+     echo $OPENAI_API_KEY
+     ```
+  2. Check API key validity with the provider
+  3. For Docker, ensure environment variables are passed:
+     ```bash
+     docker run -e OPENAI_API_KEY=$OPENAI_API_KEY ...
+     ```
+  4. Use `planoai up config.yaml` which validates API keys
+</Accordion>
+
+<Accordion title="Model not found">
+  If clients get "model not found" errors:
+  
+  1. Check the model identifier matches exactly
+  2. Verify the provider prefix (e.g., `openai/` not just `gpt-4o`)
+  3. Ensure the model is listed in `model_providers`
+  4. Check if there's a typo in the model name
+  5. Use wildcards (`openai/*`) to match all provider models
+</Accordion>
+
+<Accordion title="Routing not working as expected">
+  For preference-based routing issues:
+  
+  1. Add more specific descriptions to routing_preferences
+  2. Ensure preferences don't overlap too much
+  3. Check trace logs: `planoai trace`
+  4. Test with explicit queries matching your descriptions
+  5. Verify the default model is set for fallback
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Filters" icon="filter" href="/configuration/filters">
+    Add request/response processing
+  </Card>
+  <Card title="Advanced Configuration" icon="gear" href="/configuration/advanced">
+    Tracing, rate limits, and more
+  </Card>
+</CardGroup>

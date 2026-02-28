@@ -1,0 +1,659 @@
+---
+title: "FAQ"
+description: "Frequently asked questions about Plano"
+---
+
+Common questions about Plano, its capabilities, and how to use it effectively.
+
+## General
+
+<AccordionGroup>
+  <Accordion title="What is Plano?" icon="circle-question">
+    Plano is an AI-native proxy server and data plane for agentic applications. It handles the infrastructure concerns that every production agentic system needs:
+
+    - **Agent orchestration** - Intelligent routing between multiple agents
+    - **Model management** - Unified LLM APIs with automatic routing
+    - **Observability** - Zero-code distributed tracing and metrics
+    - **Safety** - Guardrails, moderation, and filter chains
+
+    Plano pulls these concerns out of your application code and into a dedicated proxy layer, letting you focus on business logic instead of infrastructure.
+  </Accordion>
+
+  <Accordion title="How does Plano differ from LangChain or CrewAI?" icon="code-compare">
+    **Plano is infrastructure, not a framework:**
+
+    | Aspect | Plano | LangChain/CrewAI |
+    |--------|-------|------------------|
+    | **Type** | Proxy server / data plane | Python framework |
+    | **Language** | Any (language-agnostic) | Python only |
+    | **Coupling** | Out-of-process | In-process |
+    | **Orchestration** | Declarative YAML config | Code-based |
+    | **Observability** | Automatic (zero code) | Manual instrumentation |
+    | **Deployment** | Single proxy for all apps | Embedded in each app |
+
+    **You can use Plano WITH frameworks:**
+    - LangChain and CrewAI agents work through Plano
+    - See the [multi-agent CrewAI & LangChain demo](https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/multi_agent_crewai_langchain)
+  </Accordion>
+
+  <Accordion title="Is Plano production-ready?" icon="badge-check">
+    Plano is built on **Envoy proxy** by its core contributors, who have built critical infrastructure at scale. The core proxy is battle-tested and production-grade.
+
+    **What's stable:**
+    - Agent orchestration
+    - LLM routing (by name, alias, preference)
+    - OpenTelemetry tracing
+    - Filter chains
+    - Multi-provider support
+
+    **Considerations:**
+    - The project is actively developed - expect API changes
+    - See our [GitHub issues](https://github.com/katanemo/plano/issues) for known limitations
+    - Star the repo to track releases
+
+    **Free hosted models:**
+    Plano and Arch family models (like Plano-Orchestrator-4B) are hosted free in US-central for development. For production, run locally or contact us on [Discord](https://discord.gg/pGZf2gcwEc) for API keys.
+  </Accordion>
+
+  <Accordion title="What license is Plano under?" icon="scale-balanced">
+    Plano is open source. Check the [LICENSE](https://github.com/katanemo/plano/blob/main/LICENSE) file in the repository for details.
+  </Accordion>
+</AccordionGroup>
+
+## Architecture & Design
+
+<AccordionGroup>
+  <Accordion title="How does agent routing work?" icon="route">
+    Plano uses **purpose-built, lightweight LLMs** for routing decisions:
+
+    1. You define agents with natural language descriptions:
+       ```yaml
+       agents:
+         - id: weather_agent
+           description: "Gets weather forecasts for any city"
+       ```
+
+    2. User sends request to Plano
+
+    3. Plano's **4B-parameter orchestrator model** analyzes the request and agent descriptions
+
+    4. Routing decision is made in milliseconds
+
+    5. Request is forwarded to the appropriate agent(s)
+
+    **Why it's efficient:**
+    - Small specialized models (4B params) vs. heavy GPT-4 calls
+    - Low latency (~200ms routing decisions)
+    - Cost-effective at scale
+    - No manual routing code to maintain
+  </Accordion>
+
+  <Accordion title="What's the difference between agent, model, and prompt listeners?" icon="layer-group">
+    Plano has three listener types for different use cases:
+
+    **Agent Listener (`type: agent`)**
+    - Routes to multiple backend agents
+    - Uses orchestrator for intelligent routing
+    - For multi-agent systems
+    ```yaml
+    listeners:
+      - type: agent
+        router: plano_orchestrator_v1
+        agents: [weather_agent, flight_agent]
+    ```
+
+    **Model Listener (`type: model`)**
+    - Routes to LLM providers
+    - No agent orchestration
+    - For direct LLM access with smart routing
+    ```yaml
+    listeners:
+      - type: model
+        router: plano_preference_v1
+    ```
+
+    **Prompt Listener (`type: prompt`)**
+    - Turns prompts into deterministic API calls
+    - For structured data extraction
+    - Maps prompts to REST endpoints
+  </Accordion>
+
+  <Accordion title="How does Plano handle streaming responses?" icon="water">
+    Plano fully supports **Server-Sent Events (SSE) streaming** for real-time responses:
+
+    - Agents stream chunks as they're generated
+    - Plano forwards chunks immediately (no buffering)
+    - Full OpenAI-compatible streaming format
+    - Works with multi-agent orchestration
+
+    Your agents just need to:
+    ```python
+    async def generate():
+        stream = await llm.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            stream=True  # Enable streaming
+        )
+        async for chunk in stream:
+            yield f"data: {chunk.model_dump_json()}\\n\\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+    ```
+  </Accordion>
+
+  <Accordion title="What's brightstaff?" icon="server">
+    **brightstaff** is the core Rust binary that powers Plano's intelligence:
+
+    - Handles routing decisions
+    - Manages state across requests
+    - Processes signals and telemetry
+    - Implements preference-based routing
+    - Manages filter chain execution
+
+    It runs alongside Envoy in the Docker container and communicates with the WASM filters:
+    ```
+    Envoy (proxy) ← → brightstaff (routing logic)
+       ↓                      ↓
+    WASM filters      State management
+    ```
+
+    You don't interact with brightstaff directly - it's managed by Plano.
+  </Accordion>
+</AccordionGroup>
+
+## Model Providers & Routing
+
+<AccordionGroup>
+  <Accordion title="Which LLM providers does Plano support?" icon="brain">
+    Plano supports all major LLM providers through its `hermesllm` translation layer:
+
+    **Supported providers:**
+    - OpenAI (GPT-4, GPT-4o, GPT-3.5, etc.)
+    - Anthropic (Claude 3, Claude 3.5)
+    - Google (Gemini)
+    - Mistral AI
+    - Grok (xAI)
+    - AWS Bedrock
+    - Azure OpenAI
+    - together.ai
+    - Ollama (local models)
+
+    **Adding a provider:**
+    ```yaml
+    model_providers:
+      - model: anthropic/claude-3-5-sonnet
+        access_key: $ANTHROPIC_API_KEY
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        default: true
+    ```
+  </Accordion>
+
+  <Accordion title="How do model aliases work?" icon="tag">
+    **Model aliases** let you use semantic names instead of provider-specific model IDs:
+
+    **Define aliases:**
+    ```yaml
+    model_aliases:
+      arch.summarize.v1:
+        target: gpt-4o-mini
+      arch.reasoning.v1:
+        target: gpt-4o
+      chat-model:
+        target: claude-3-5-sonnet-20241022
+    ```
+
+    **Use in requests:**
+    ```bash
+    curl http://localhost:12000/v1/chat/completions \
+      -d '{"model": "arch.summarize.v1", ...}'
+    ```
+
+    **Benefits:**
+    - Centralized model governance
+    - Easy model swapping (change target in one place)
+    - Versioned model strategies
+    - Semantic naming ("summarize" vs "gpt-4o-mini")
+
+    See the [model alias demo](https://github.com/katanemo/plano/tree/main/demos/llm_routing/model_alias_routing).
+  </Accordion>
+
+  <Accordion title="Can I use local models with Plano?" icon="house">
+    **Yes!** Plano works with locally-hosted models:
+
+    **With Ollama:**
+    ```yaml
+    model_providers:
+      - model: ollama/llama3.2
+        url: http://localhost:11434
+    ```
+
+    Then run Ollama:
+    ```bash
+    ollama run llama3.2
+    ```
+
+    **With any OpenAI-compatible server:**
+    ```yaml
+    model_providers:
+      - model: local/my-model
+        url: http://localhost:8080
+        access_key: not-needed
+    ```
+
+    See the [Ollama integration demo](https://github.com/katanemo/plano/tree/main/demos/integrations/ollama).
+  </Accordion>
+
+  <Accordion title="How does preference-based routing work?" icon="sliders">
+    **Preference routing** automatically selects models based on task type:
+
+    **Define routes by task:**
+    ```yaml
+    listeners:
+      - type: model
+        router: plano_preference_v1
+        routes:
+          - id: code_generation
+            description: "Generate new code, write functions"
+            providers:
+              - model: openai/gpt-4o
+          - id: code_understanding
+            description: "Explain code, review, analyze"
+            providers:
+              - model: anthropic/claude-3-5-sonnet
+    ```
+
+    **Plano analyzes each request and routes to the best model for that task.**
+
+    See the [preference-based routing demo](https://github.com/katanemo/plano/tree/main/demos/llm_routing/preference_based_routing).
+  </Accordion>
+
+  <Accordion title="Can I override model selection per request?" icon="hand">
+    **Yes**, use the `x-arch-llm-provider-hint` header:
+
+    ```bash
+    curl -H 'x-arch-llm-provider-hint: anthropic/claude-3-5-sonnet' \
+         -H 'Content-Type: application/json' \
+         -d '{"messages": [...], "model": "gpt-4o"}' \
+         http://localhost:12000/v1/chat/completions
+    ```
+
+    This forces Plano to use Claude instead of the configured routing logic.
+  </Accordion>
+</AccordionGroup>
+
+## Agents & Orchestration
+
+<AccordionGroup>
+  <Accordion title="What language can I write agents in?" icon="code">
+    **Any language!** Agents just need to implement an HTTP endpoint.
+
+    **Requirements:**
+    - Expose an OpenAI-compatible `/v1/chat/completions` endpoint
+    - Accept JSON with `messages` array
+    - Return OpenAI-compatible response format
+    - Support streaming (optional but recommended)
+
+    **Example languages:**
+    - Python (FastAPI, Flask)
+    - JavaScript/TypeScript (Express, Fastify)
+    - Go (net/http)
+    - Rust (axum, actix-web)
+    - Java (Spring Boot)
+
+    See [building agents guide](/guides/building-agents) for examples.
+  </Accordion>
+
+  <Accordion title="Can an agent call other agents?" icon="sitemap">
+    **Yes**, agents can compose:
+
+    **Pattern 1: Agent calls Plano's LLM gateway**
+    ```python
+    llm = AsyncOpenAI(base_url="http://localhost:12001/v1")
+    response = await llm.chat.completions.create(...)
+    ```
+    This gets automatic routing, tracing, and provider management.
+
+    **Pattern 2: Agent calls another agent via Plano**
+    Point your HTTP client at Plano's agent listener:
+    ```python
+    response = requests.post(
+        "http://localhost:8001/v1/chat/completions",
+        json={"messages": [...]}
+    )
+    ```
+
+    **Pattern 3: Direct agent-to-agent calls**
+    Bypass Plano for performance, but lose orchestration:
+    ```python
+    requests.post("http://other-agent:10520/v1/chat/completions")
+    ```
+  </Accordion>
+
+  <Accordion title="How do I add a new agent without redeploying?" icon="plus">
+    **Just update your config and restart Plano:**
+
+    1. Add agent definition:
+       ```yaml
+       agents:
+         - id: new_agent
+           url: http://localhost:10530
+       ```
+
+    2. Add to listener:
+       ```yaml
+       listeners:
+         - type: agent
+           agents:
+             - id: new_agent
+               description: "What this agent does"
+       ```
+
+    3. Restart Plano:
+       ```bash
+       planoai down && planoai up
+       ```
+
+    **No code changes needed** - routing logic updates automatically.
+  </Accordion>
+
+  <Accordion title="Can Plano handle multi-turn conversations?" icon="comments">
+    **Yes**, Plano maintains conversation context:
+
+    - Full message history is passed to agents
+    - Agents can reference previous turns
+    - State management for session data
+    - Conversation threading
+
+    See the [multi-turn RAG demo](https://github.com/katanemo/plano/tree/main/demos/advanced/multi_turn_rag) for an example.
+  </Accordion>
+</AccordionGroup>
+
+## Observability
+
+<AccordionGroup>
+  <Accordion title="What observability does Plano provide?" icon="chart-mixed">
+    **Automatic, zero-code observability:**
+
+    **Distributed Tracing (OpenTelemetry)**
+    - End-to-end request traces
+    - Agent routing decisions
+    - LLM provider calls
+    - Filter chain execution
+    - Latency breakdown
+
+    **Metrics**
+    - Request counts
+    - Token usage
+    - Error rates
+    - Latency percentiles
+
+    **Agentic Signals™**
+    - Custom signals for evaluation
+    - Conversation flows
+    - Agent interactions
+    - Routing patterns
+
+    **View traces:**
+    ```bash
+    # Start Jaeger (included in demos)
+    docker compose up jaeger
+    
+    # Open UI
+    open http://localhost:16686
+    ```
+  </Accordion>
+
+  <Accordion title="How do I export traces to my observability platform?" icon="upload">
+    Plano uses **OpenTelemetry**, so it works with any OTLP-compatible backend:
+
+    **Configure in config.yaml:**
+    ```yaml
+    tracing:
+      otlp_endpoint: http://my-collector:4317
+      random_sampling: 100  # Percentage of requests
+    ```
+
+    **Supported backends:**
+    - Jaeger
+    - Zipkin
+    - Honeycomb
+    - Datadog
+    - New Relic
+    - Any OTLP collector
+
+    For Docker environments:
+    ```yaml
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
+    ```
+  </Accordion>
+
+  <Accordion title="What are Agentic Signals?" icon="signal">
+    **Agentic Signals™** are Plano's custom telemetry for AI systems:
+
+    - Capture agent behavior patterns
+    - Track routing decisions
+    - Monitor conversation quality
+    - Build evaluation datasets
+    - Identify improvement areas
+
+    **Signals include:**
+    - Which agents were considered
+    - Why a specific agent was chosen
+    - Conversation turn patterns
+    - Multi-agent interactions
+    - Filter chain execution
+
+    These are automatically captured and exported via OpenTelemetry.
+  </Accordion>
+</AccordionGroup>
+
+## Security & Safety
+
+<AccordionGroup>
+  <Accordion title="How do filter chains work?" icon="filter">
+    **Filter chains** process requests before they reach agents:
+
+    ```yaml
+    filters:
+      - id: input_guards
+        url: http://localhost:10500
+      - id: query_rewriter
+        url: http://localhost:10501
+    
+    listeners:
+      - type: agent
+        filters:
+          - input_guards    # Runs first
+          - query_rewriter  # Runs second
+    ```
+
+    **Common use cases:**
+    - Input validation
+    - PII detection/removal
+    - Prompt injection protection
+    - Query rewriting for better RAG
+    - Context augmentation
+    - Access control
+
+    Filters can:
+    - Modify messages
+    - Add context
+    - Reject requests
+    - Log/audit
+
+    See [filter chains guide](/guides/guardrails) for examples.
+  </Accordion>
+
+  <Accordion title="Does Plano support MCP (Model Context Protocol)?" icon="plug">
+    **Yes!** Plano has built-in MCP support for filter chains:
+
+    ```yaml
+    filters:
+      - id: my_mcp_filter
+        type: mcp  # MCP filter type
+        url: http://localhost:10500
+        transport: streamable-http
+        tool: my_tool_name
+    ```
+
+    MCP filters can:
+    - Validate inputs
+    - Rewrite queries
+    - Fetch context from knowledge bases
+    - Call external tools
+
+    See the [MCP filter demo](https://github.com/katanemo/plano/tree/main/demos/filter_chains/mcp_filter).
+  </Accordion>
+
+  <Accordion title="How are API keys managed?" icon="key">
+    **Centralized key management** in Plano:
+
+    **In config.yaml:**
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY  # From environment
+    ```
+
+    **Benefits:**
+    - Keys never in application code
+    - One place to rotate keys
+    - Different keys per provider
+    - Environment-based configuration
+
+    **For Docker:**
+    ```bash
+    # .env file
+    OPENAI_API_KEY=sk-...
+    ANTHROPIC_API_KEY=sk-ant-...
+    ```
+
+    Agents don't need to know about keys - they call Plano's LLM gateway with `api_key="EMPTY"`.
+  </Accordion>
+</AccordionGroup>
+
+## Deployment
+
+<AccordionGroup>
+  <Accordion title="How do I deploy Plano to production?" icon="rocket">
+    **Deployment options:**
+
+    **1. Docker (recommended)**
+    ```bash
+    docker run -d \
+      -p 8001:8001 \
+      -p 12000:12000 \
+      -v ./config.yaml:/app/config.yaml \
+      -e OPENAI_API_KEY=$OPENAI_API_KEY \
+      katanemo/plano:latest
+    ```
+
+    **2. Kubernetes**
+    Deploy the Plano container with your config as a ConfigMap:
+    ```yaml
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: plano-config
+    data:
+      config.yaml: |
+        version: v0.3.0
+        agents: [...]
+    ```
+
+    **3. Docker Compose**
+    ```yaml
+    services:
+      plano:
+        image: katanemo/plano:latest
+        ports:
+          - "8001:8001"
+        volumes:
+          - ./config.yaml:/app/config.yaml
+    ```
+
+    **Production checklist:**
+    - Set tracing sampling < 100% for high traffic
+    - Use secrets management for API keys
+    - Configure resource limits
+    - Set up health checks
+    - Enable persistent logging
+  </Accordion>
+
+  <Accordion title="What are the system requirements?" icon="microchip">
+    **Minimum requirements:**
+    - Docker 20.10+
+    - 2GB RAM
+    - 2 CPU cores
+    - 1GB disk space
+
+    **Recommended for production:**
+    - 4GB+ RAM
+    - 4+ CPU cores
+    - SSD storage
+    - Load balancer for high availability
+
+    **Network ports:**
+    - 8001 - Agent listener (default)
+    - 12000 - Model listener (default)
+    - 12001 - LLM gateway (default)
+    - 4317 - OTLP traces (if using observability)
+  </Accordion>
+
+  <Accordion title="Can Plano scale horizontally?" icon="arrows-left-right">
+    **Yes**, Plano is stateless and scales horizontally:
+
+    - Run multiple Plano instances behind a load balancer
+    - State is managed by brightstaff (can be external)
+    - No shared state between instances
+    - Linear scaling with instance count
+
+    **For Kubernetes:**
+    ```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    spec:
+      replicas: 3  # Scale to 3 instances
+    ```
+
+    **For production:**
+    - Use Redis/PostgreSQL for shared state (coming soon)
+    - Deploy agents separately from Plano
+    - Use autoscaling based on CPU/memory
+  </Accordion>
+</AccordionGroup>
+
+## Still have questions?
+
+<CardGroup cols={2}>
+  <Card
+    title="Join Discord"
+    icon="discord"
+    href="https://discord.gg/pGZf2gcwEc"
+  >
+    Get help from the community and maintainers
+  </Card>
+  <Card
+    title="GitHub Discussions"
+    icon="github"
+    href="https://github.com/katanemo/plano/discussions"
+  >
+    Ask questions and share ideas
+  </Card>
+  <Card
+    title="Documentation"
+    icon="book"
+    href="/quickstart"
+  >
+    Read the full documentation
+  </Card>
+  <Card
+    title="Examples"
+    icon="code"
+    href="/resources/examples"
+  >
+    Explore working demos
+  </Card>
+</CardGroup>

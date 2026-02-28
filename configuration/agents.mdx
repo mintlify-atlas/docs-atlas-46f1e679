@@ -1,0 +1,512 @@
+---
+title: Agents
+description: Configure external AI agents for orchestration in Plano
+---
+
+Agents are external services that provide specialized AI capabilities. Plano can orchestrate multiple agents, intelligently routing requests to the most appropriate agent based on the query.
+
+## What Are Agents?
+
+In Plano's architecture, an agent is:
+- An external HTTP service that implements AI capabilities
+- A specialized component that handles specific types of tasks
+- An endpoint that Plano can call and coordinate with other agents
+- Compatible with various frameworks (LangChain, CrewAI, custom implementations)
+
+<Info>
+  Agents are different from model providers. Model providers are LLM APIs (like OpenAI or Anthropic), while agents are your custom services that may use those LLMs internally.
+</Info>
+
+## Configuration
+
+Agents are defined in the top-level `agents` array:
+
+```yaml
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+  - id: booking_agent
+    url: http://host.docker.internal:10530
+```
+
+### Parameters
+
+<ParamField path="id" type="string" required>
+  A unique identifier for this agent. Used to reference the agent in listener configurations.
+  
+  **Requirements:**
+  - Must be unique across all agents
+  - Use descriptive names that indicate the agent's purpose
+  
+  **Examples:** `weather_agent`, `flight_search`, `rag_assistant`
+</ParamField>
+
+<ParamField path="url" type="string" required>
+  The HTTP URL where the agent service is running.
+  
+  **Format:** `http://host:port` or `https://host:port`
+  
+  **Examples:**
+  - `http://host.docker.internal:10510` (Docker host)
+  - `http://localhost:8080` (local development)
+  - `https://agent.example.com` (production)
+  
+  <Note>
+    When running Plano in Docker, use `host.docker.internal` to reach services on the host machine.
+  </Note>
+</ParamField>
+
+## Using Agents in Listeners
+
+Once defined, agents are referenced in agent-type listeners:
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: travel_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          Provides real-time weather information and forecasts for any city
+          worldwide. Handles questions about current weather, forecasts,
+          temperature, and weather conditions.
+          
+      - id: flight_agent
+        description: |
+          Provides live flight information between airports. Handles questions
+          about flight schedules, delays, availability, and routes.
+```
+
+<Warning>
+  The `id` in the listener's `agents` array must match an `id` in the top-level `agents` array, or Plano will fail validation.
+</Warning>
+
+## Agent Descriptions
+
+The `description` field in listener agent configurations is critical for routing:
+
+<Steps>
+  <Step title="Analyzed by Orchestrator">
+    Plano's orchestrator analyzes all agent descriptions to understand capabilities
+  </Step>
+  <Step title="Intent Matching">
+    When a request arrives, the orchestrator matches the user's intent against agent descriptions
+  </Step>
+  <Step title="Agent Selection">
+    The best-matching agent(s) are selected to handle the request
+  </Step>
+  <Step title="Response Coordination">
+    If multiple agents are needed, Plano coordinates their responses
+  </Step>
+</Steps>
+
+### Writing Effective Descriptions
+
+<Tabs>
+  <Tab title="Good Description">
+    ```yaml
+    agents:
+      - id: weather_agent
+        description: |
+          WeatherAgent is a specialized AI assistant for real-time weather 
+          information and forecasts. It provides accurate weather data for any 
+          city worldwide using the Open-Meteo API, helping travelers plan their 
+          trips with up-to-date weather conditions.
+
+          Capabilities:
+            * Get real-time weather conditions and multi-day forecasts for any city
+            * Provides current temperature, conditions, and sunrise/sunset times
+            * Understands conversation context to resolve location references
+            * Handles questions like "What's the weather in [city]?"
+            * When queries include both weather and other topics, answers ONLY weather
+
+          Examples:
+            - "What's the weather in Paris?"
+            - "Will it rain in Tokyo tomorrow?"
+            - "What's the forecast for New York this week?"
+    ```
+    
+    **Why it's good:**
+    - Clear statement of purpose
+    - Specific capabilities listed
+    - Example queries provided
+    - Boundary conditions explained (ONLY weather)
+  </Tab>
+  
+  <Tab title="Poor Description">
+    ```yaml
+    agents:
+      - id: weather_agent
+        description: Gets weather information
+    ```
+    
+    **Why it's poor:**
+    - Too vague
+    - No capability details
+    - No example queries
+    - Doesn't help orchestrator make decisions
+  </Tab>
+</Tabs>
+
+## Complete Examples
+
+### Multi-Agent Travel Service
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+
+listeners:
+  - type: agent
+    name: travel_booking_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: |
+          WeatherAgent provides real-time weather information and forecasts 
+          for any city worldwide using the Open-Meteo API.
+
+          Capabilities:
+            * Get real-time weather conditions and multi-day forecasts
+            * Provides current temperature, conditions, sunrise/sunset times
+            * Understands conversation context to resolve location references
+            * Handles weather-related questions
+            * When queries include both weather and other travel questions,
+              this agent answers ONLY the weather part
+
+      - id: flight_agent
+        description: |
+          FlightAgent provides live flight information between airports using 
+          the FlightAware AeroAPI.
+
+          Capabilities:
+            * Get live flight information between airports
+            * Shows real-time flight status, delays, and gate information
+            * Automatically resolves city names to airport codes (IATA/ICAO)
+            * Understands conversation context for origin/destination
+            * Handles flight-related questions
+            * When queries include both flight and other travel questions,
+              this agent answers ONLY the flight part
+
+tracing:
+  random_sampling: 100
+  span_attributes:
+    header_prefixes:
+      - x-acme-
+```
+
+### RAG Agent with Filter Chain
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://host.docker.internal:10505
+
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    type: mcp
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    type: mcp
+  - id: context_builder
+    url: http://host.docker.internal:10502
+    type: mcp
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+
+listeners:
+  - type: agent
+    name: rag_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: |
+          Virtual assistant for retrieval augmented generation tasks.
+          Searches documentation and knowledge bases to provide accurate,
+          context-aware responses based on your organization's data.
+        filter_chain:
+          - input_guards      # Validate and sanitize input
+          - query_rewriter    # Optimize query for retrieval
+          - context_builder   # Add relevant context from vector DB
+
+tracing:
+  random_sampling: 100
+```
+
+### Conversational Agent with State
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: assistant
+    url: http://localhost:10510
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+
+listeners:
+  - type: agent
+    name: conversation_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: assistant
+        description: |
+          A conversational assistant that maintains context across multi-turn
+          conversations. It can answer follow-up questions, remember previous
+          context, and provide coherent responses in ongoing dialogues.
+
+# Enable state storage for conversation history
+state_storage:
+  type: memory
+
+tracing:
+  random_sampling: 100
+```
+
+## Agent Orchestration Modes
+
+<Tabs>
+  <Tab title="Single Agent">
+    The orchestrator routes each request to exactly one agent:
+    
+    ```yaml
+    listeners:
+      - type: agent
+        name: simple_service
+        port: 8001
+        router: plano_orchestrator_v1
+        agents:
+          - id: agent_1
+            description: Handles all requests
+            default: true
+    ```
+  </Tab>
+  
+  <Tab title="Multiple Agents">
+    The orchestrator analyzes the request and selects the best agent:
+    
+    ```yaml
+    listeners:
+      - type: agent
+        name: multi_service
+        port: 8001
+        router: plano_orchestrator_v1
+        agents:
+          - id: weather_agent
+            description: Handles weather queries
+          - id: flight_agent
+            description: Handles flight queries
+          - id: general_agent
+            description: Handles general questions
+            default: true
+    ```
+  </Tab>
+  
+  <Tab title="Multi-Agent Collaboration">
+    Complex queries may involve multiple agents working together:
+    
+    ```yaml
+    listeners:
+      - type: agent
+        name: complex_service
+        port: 8001
+        router: plano_orchestrator_v1
+        agents:
+          - id: research_agent
+            description: Researches topics and gathers information
+          - id: analysis_agent
+            description: Analyzes data and identifies patterns
+          - id: synthesis_agent
+            description: Synthesizes findings into coherent responses
+    ```
+    
+    <Info>
+      For queries requiring multiple agents, Plano coordinates their execution and synthesizes their responses.
+    </Info>
+  </Tab>
+</Tabs>
+
+## Agent Protocols
+
+Plano communicates with agents using HTTP POST requests with OpenAI-compatible message formats:
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather in Paris?"
+    }
+  ],
+  "model": "gpt-4o",
+  "stream": false
+}
+```
+
+Your agent service should respond with:
+
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "The current weather in Paris is..."
+      }
+    }
+  ]
+}
+```
+
+<Tip>
+  Agents can be implemented using any framework that supports HTTP and OpenAI-compatible message formats, including LangChain, CrewAI, Semantic Kernel, or custom implementations.
+</Tip>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Design agents with clear boundaries">
+    Each agent should have a well-defined scope:
+    - ✅ Weather agent handles only weather queries
+    - ✅ Flight agent handles only flight queries
+    - ❌ General agent that tries to do everything
+    
+    Clear boundaries help the orchestrator make better routing decisions.
+  </Accordion>
+  
+  <Accordion title="Use descriptive agent IDs">
+    Choose IDs that clearly indicate the agent's purpose:
+    - ✅ `weather_forecast_agent`, `flight_search_agent`
+    - ❌ `agent1`, `test_agent`, `my_agent`
+  </Accordion>
+  
+  <Accordion title="Include example queries in descriptions">
+    Add 3-5 example queries that the agent can handle:
+    ```yaml
+    description: |
+      Handles currency exchange queries.
+      
+      Examples:
+        - "What's the USD to EUR exchange rate?"
+        - "Convert 100 dollars to euros"
+        - "How much is 50 GBP in USD?"
+    ```
+  </Accordion>
+  
+  <Accordion title="Specify agent limitations">
+    Explicitly state what the agent does NOT handle:
+    ```yaml
+    description: |
+      Provides weather forecasts.
+      
+      Does NOT handle:
+        - Historical weather data
+        - Climate change analysis
+        - Agricultural forecasts
+    ```
+  </Accordion>
+  
+  <Accordion title="Use filter chains for preprocessing">
+    Add filters to agents that need:
+    - Input validation and sanitization
+    - Query rewriting for better retrieval
+    - Context augmentation
+    - PII detection and masking
+    
+    ```yaml
+    agents:
+      - id: sensitive_data_agent
+        filter_chain:
+          - pii_detector
+          - input_validator
+          - context_builder
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Agent not being selected">
+  If your agent isn't receiving requests:
+  
+  1. **Improve the description** - Add more detail about capabilities
+  2. **Add example queries** - Show what the agent can handle
+  3. **Check the logs** - Use `planoai logs` to see routing decisions
+  4. **Enable tracing** - Use `planoai trace` to see why agents are selected/rejected
+  5. **Test with explicit queries** - Try queries that exactly match your description
+</Accordion>
+
+<Accordion title="Connection refused errors">
+  If Plano can't connect to your agent:
+  
+  1. **Verify the agent is running** - Check that your agent service is up
+  2. **Check the URL** - Ensure the URL and port are correct
+  3. **Docker networking** - Use `host.docker.internal` for host services
+  4. **Network policies** - Verify no firewalls are blocking connections
+  5. **Test directly** - Use `curl` to test the agent endpoint
+</Accordion>
+
+<Accordion title="Agent timeouts">
+  If agent requests timeout:
+  
+  1. **Increase listener timeout** - Set a higher `timeout` value
+  2. **Optimize agent performance** - Reduce agent response time
+  3. **Check agent logs** - Look for slow operations
+  4. **Consider async patterns** - For long-running operations
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Filters" icon="filter" href="/configuration/filters">
+    Add filter chains to agents
+  </Card>
+  <Card title="Model Providers" icon="brain" href="/configuration/model-providers">
+    Configure LLMs for orchestration
+  </Card>
+</CardGroup>

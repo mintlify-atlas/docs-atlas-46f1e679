@@ -1,0 +1,136 @@
+---
+title: "Introduction to Plano"
+description: "The AI-native proxy server and data plane for agentic applications. Ship agents to production faster with intelligent orchestration, smart LLM routing, and zero-code observability."
+---
+
+<img src="/images/hero-banner.svg" alt="Plano - AI-native proxy for agentic apps" className="block dark:hidden" />
+<img src="/images/hero-banner-dark.svg" alt="Plano - AI-native proxy for agentic apps" className="hidden dark:block" />
+
+## The Challenge
+
+Building agentic demos is easy. **Shipping agentic applications safely, reliably, and repeatably to production is hard.** 
+
+After the thrill of a quick hack, you end up building the "hidden AI middleware" to reach production: routing logic to reach the right agent, guardrail hooks for safety and moderation, evaluation and observability glue for continuous learning, and model/provider quirks scattered across frameworks and application code.
+
+## The Solution
+
+Plano solves this by moving core delivery concerns into a unified, out-of-process dataplane.
+
+Plano pulls out the rote plumbing work and decouples you from brittle framework abstractions, centralizing what shouldn't be bespoke in every codebase—like agent routing and orchestration, rich agentic signals and traces for continuous improvement, guardrail filters for safety and moderation, and smart LLM routing APIs for model agility.
+
+<Note>
+**Use any language or AI framework.** Plano works with Python, JavaScript, Go, or any language that can make HTTP requests. Your agents stay framework-agnostic.
+</Note>
+
+## Core Capabilities
+
+<CardGroup cols={2}>
+  <Card title="Agent Orchestration" icon="sitemap" href="/core-concepts#agent-orchestration">
+    Low-latency orchestration between agents. Add new agents without modifying app code using Plano-Orchestrator models.
+  </Card>
+  <Card title="Model Agility" icon="arrows-rotate" href="/core-concepts#model-providers">
+    Route by model name, alias (semantic names), or automatically via preferences across 15+ LLM providers.
+  </Card>
+  <Card title="Agentic Signals™" icon="chart-line" href="/core-concepts#observability">
+    Zero-code capture of signals, OTEL traces, and metrics across every agent interaction automatically.
+  </Card>
+  <Card title="Filter Chains" icon="shield-check" href="/core-concepts#filter-chains">
+    Build jailbreak protection, moderation policies, and memory hooks consistently via reusable filters.
+  </Card>
+</CardGroup>
+
+## What You Don't Have to Build
+
+| Infrastructure Concern | Without Plano | With Plano |
+|---------|---------------|------------|
+| **Agent Orchestration** | Write intent classifier + routing logic | Declare agent descriptions in YAML |
+| **Model Management** | Handle each provider's API quirks | Unified LLM APIs with state management |
+| **Rich Tracing** | Instrument every service with OTEL | Automatic end-to-end traces and logs |
+| **Learning Signals** | Build pipeline to capture/export spans | Zero-code agentic signals |
+| **Adding Agents** | Update routing code, test, redeploy | Add to config, restart |
+
+<Tip>
+Plano uses purpose-built, lightweight LLMs (like our 4B-parameter orchestrator) instead of heavyweight frameworks or GPT-4 for routing—giving you production-grade routing at a fraction of the cost and latency.
+</Tip>
+
+## Architecture Overview
+
+Plano sits between your clients and your agents/LLMs, acting as an intelligent dataplane that handles orchestration, routing, observability, and safety.
+
+<img src="/images/architecture-overview.png" alt="High-level network flow of Plano in your agentic stack" />
+
+<Info>
+Plano is built on [Envoy Proxy](https://envoyproxy.io) by its core contributors, who built critical infrastructure at scale for modern workloads at companies like Airbnb, Dropbox, Google, Reddit, and Stripe.
+</Info>
+
+## Inner Loop vs. Outer Loop
+
+Plano distinguishes between two types of work:
+
+<Steps>
+  <Step title="Inner Loop (Your Code)">
+    This is where your business logic lives—the actual agent implementation that decides which tools to call, how to interpret results, and when the task is complete. Write this in any language or framework:
+    
+    - Python (LangChain, LlamaIndex, CrewAI, custom)
+    - JavaScript/TypeScript (LangChain.js, custom Node.js)
+    - Any other AI framework
+  </Step>
+  
+  <Step title="Outer Loop (Plano's Job)">
+    This is the orchestration layer—Plano manages the lifecycle of requests across agents and LLMs:
+    
+    - Intent analysis and routing decisions
+    - Sequencing and coordination across agents
+    - Retries, failover, circuit breaking
+    - Tracing, metrics, and observability
+  </Step>
+</Steps>
+
+**Result:** You focus on agent logic. Plano handles routing, retries, and cross-cutting concerns.
+
+## Why Teams Choose Plano
+
+<AccordionGroup>
+  <Accordion title="For Developers">
+    Stay focused on the core product logic of your agents. Stop rebuilding the same plumbing (routing, retries, tracing) for every agent. Write agents in any language—Plano orchestrates them via HTTP.
+  </Accordion>
+  
+  <Accordion title="For Product Teams">
+    Shorten feedback loops for learning. Get automatic capture of agentic signals, traces, and metrics to understand what's working and what's not. Iterate faster with centralized observability.
+  </Accordion>
+  
+  <Accordion title="For Engineering Teams">
+    Standardize policy and safety across agents and LLMs. Apply guardrails, content moderation, and compliance checks consistently via filter chains. Reduce security surface area with centralized governance.
+  </Accordion>
+</AccordionGroup>
+
+## Production-Ready Foundation
+
+Plano is grounded in open protocols and proven patterns:
+
+- **OpenAI-compatible APIs** for maximum compatibility
+- **Model Context Protocol (MCP)** support for filter chains
+- **OpenTelemetry** for distributed tracing
+- **Sidecar deployment** patterns for clean integration
+- **Built on Envoy Proxy** for battle-tested reliability
+
+<Warning>
+**Free hosted models for development:** Plano and the Arch family of LLMs (like Plano-Orchestrator-4B, Arch-Router, etc.) are hosted free of charge in the US-central region to give you a great first-run developer experience. To scale and run in production, you can either run these LLMs locally or contact us on [Discord](https://discord.gg/pGZf2gcwEc) for API keys.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get Plano running in minutes with a working example
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/core-concepts">
+    Understand listeners, agents, model providers, and filters
+  </Card>
+  <Card title="GitHub Repository" icon="github" href="https://github.com/katanemo/plano">
+    Access source code, contribute, and track updates
+  </Card>
+  <Card title="Join Discord" icon="discord" href="https://discord.gg/pGZf2gcwEc">
+    Get help and connect with the Plano community
+  </Card>
+</CardGroup>

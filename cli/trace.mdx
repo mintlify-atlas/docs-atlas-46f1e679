@@ -1,0 +1,647 @@
+---
+title: planoai trace
+description: Collect and analyze OpenTelemetry traces from Plano
+---
+
+The `planoai trace` command provides distributed tracing for Plano requests using OpenTelemetry. Visualize request flows, measure latency, and debug routing decisions.
+
+## Basic Usage
+
+### Start trace collection
+
+```bash
+planoai trace listen
+```
+
+Starts an OTLP gRPC collector on port 4317.
+
+### View traces
+
+```bash
+planoai trace
+```
+
+Shows the most recent trace with a rich terminal visualization.
+
+## Command Signature
+
+```bash
+planoai trace [TARGET] [OPTIONS]
+```
+
+## Arguments
+
+<ParamField path="TARGET" type="string" optional>
+  What to trace:
+  
+  - `listen` — Start the trace collector
+  - `stop` or `down` — Stop the trace collector
+  - `last` (default) — Show the most recent trace
+  - `any` — List all traces
+  - `<trace_id>` — Show specific trace by ID (8 or 32 hex characters)
+  
+  ```bash
+  planoai trace listen          # Start collector
+  planoai trace last            # Show latest trace
+  planoai trace a1b2c3d4        # Show trace by short ID
+  planoai trace --list          # List all traces
+  ```
+</ParamField>
+
+## Options
+
+<ParamField path="--filter" type="string" repeatable>
+  Limit displayed attributes to matching keys (wildcards supported).
+  
+  ```bash
+  planoai trace --filter "http.*"
+  planoai trace --filter "llm.model" --filter "duration_ms"
+  ```
+  
+  Supports wildcard patterns:
+  - `http.*` — All attributes starting with "http."
+  - `*model*` — Any attribute containing "model"
+  - `llm.duration_ms` — Exact match
+</ParamField>
+
+<ParamField path="--where" type="key=value" repeatable>
+  Filter traces containing spans with specific attribute values.
+  
+  ```bash
+  planoai trace --where "llm.model=gpt-4"
+  planoai trace --where "http.status_code=500" --where "agent.name=code_agent"
+  ```
+  
+  Multiple `--where` filters use AND semantics (all must match).
+</ParamField>
+
+<ParamField path="--list" type="flag">
+  List trace IDs instead of displaying full traces.
+  
+  ```bash
+  planoai trace --list
+  ```
+  
+  In interactive mode (TTY), shows a selectable menu. Use `--no-interactive` for plain output.
+</ParamField>
+
+<ParamField path="--no-interactive" type="flag">
+  Disable interactive prompts and selections.
+  
+  ```bash
+  planoai trace --list --no-interactive
+  ```
+  
+  Useful in scripts or CI environments.
+</ParamField>
+
+<ParamField path="--limit" type="integer">
+  Limit the number of traces returned.
+  
+  ```bash
+  planoai trace --list --limit 10
+  ```
+</ParamField>
+
+<ParamField path="--since" type="duration">
+  Show traces from the last N minutes/hours/days.
+  
+  ```bash
+  planoai trace --since 5m      # Last 5 minutes
+  planoai trace --since 2h      # Last 2 hours
+  planoai trace --since 1d      # Last 24 hours
+  ```
+  
+  Format: `<number><unit>` where unit is `m` (minutes), `h` (hours), or `d` (days).
+</ParamField>
+
+<ParamField path="--json" type="flag">
+  Output raw JSON instead of formatted terminal output.
+  
+  ```bash
+  planoai trace --json
+  planoai trace --list --json
+  ```
+  
+  Useful for programmatic processing or integration with other tools.
+</ParamField>
+
+<ParamField path="--verbose" type="flag">
+  Show all span attributes (default trims inbound/outbound spans to key fields).
+  
+  ```bash
+  planoai trace --verbose
+  ```
+  
+  Without `--verbose`, only these attributes are shown for inbound/outbound spans:
+  - `http.method`
+  - `http.target`
+  - `http.status_code`
+  - `url.scheme`
+  - `guid:x-request-id`
+  - `request_size`
+  - `response_size`
+</ParamField>
+
+## Trace Listener
+
+### Start the collector
+
+```bash
+planoai trace listen
+```
+
+**Output:**
+```
+Trace listener started
+● gRPC (OTLP receiver) on 0.0.0.0:4317
+Process ID: 12345
+Use planoai trace to view collected traces.
+```
+
+The listener runs as a background daemon process.
+
+### Stop the collector
+
+```bash
+planoai trace stop
+```
+
+**Output:**
+```
+✓ Trace listener stopped
+```
+
+### Collector behavior
+
+- Listens on `0.0.0.0:4317` for OTLP gRPC traces
+- Stores traces in-memory (max 50 traces, 500 spans per trace)
+- Automatically links spans by parent-child relationships
+- Survives as a daemon until explicitly stopped
+
+<Warning>
+Traces are stored **in-memory only**. They are lost when the collector is stopped or if the process crashes.
+</Warning>
+
+## Trace Visualization
+
+### View the latest trace
+
+```bash
+planoai trace
+```
+
+**Output:**
+```
+Trace: a1b2c3d4e5f6g7h8 (1234ms total)
+
+├─ 0ms plano(inbound) POST /v1/chat/completions
+│  ├─ http.method: POST
+│  ├─ http.target: /v1/chat/completions
+│  ├─ http.status_code: 200
+│  ├─ request_size: 512
+│  ├─ response_size: 2048
+│
+├─ 15ms plano(orchestrator) route_selection
+│  ├─ routing.determination_ms: 12
+│  ├─ route.selected_model: claude-3-5-sonnet-20241022
+│  ├─ selection.agents: ["code_agent"]
+│
+├─ 30ms plano(outbound) anthropic
+│  ├─ llm.model: claude-3-5-sonnet-20241022
+│  ├─ llm.is_streaming: false
+│  ├─ llm.time_to_first_token: 850
+│  ├─ llm.duration_ms: 1189
+│  ├─ llm.response_bytes: 1847
+```
+
+The tree shows:
+- **Timestamp offset** from trace start (0ms, 15ms, 30ms)
+- **Service name** (plano(inbound), plano(orchestrator), etc.)
+- **Span name** (POST /v1/chat/completions, route_selection)
+- **Attributes** as key-value pairs
+
+### Interactive trace selection
+
+```bash
+planoai trace --list
+```
+
+**Output:**
+```
+? Select a trace to view:
+  ❯ a1b2c3d4 (1234ms total • 2024-02-28 10:15:23)
+    b2c3d4e5 (987ms total • 2024-02-28 10:14:15)
+    c3d4e5f6 (2341ms total • 2024-02-28 10:13:42)
+```
+
+Use arrow keys to select, Enter to view.
+
+### Trace with errors
+
+Errors are highlighted in red:
+
+```
+Trace: a1b2c3d4e5f6g7h8 (1234ms total)
+
+├─ 0ms plano(inbound) POST /v1/chat/completions
+│  ├─ http.method: POST
+│  ├─ http.status_code: 500 💥
+│
+Internal Server Error
+├─ 15ms plano(outbound) anthropic
+│  ├─ http.status_code: 429 🚦
+│  ├─ error.message: Rate limit exceeded
+```
+
+Error symbols:
+- 💥 Server error (5xx)
+- 🚦 Rate limited (429)
+- 🔍 Not found (404)
+- 🚫 Forbidden (403)
+- 🔐 Unauthorized (401)
+- ⚠️ Client error (4xx)
+
+## Examples
+
+### Basic trace collection
+
+<Steps>
+  <Step title="Start the trace listener">
+    ```bash
+    planoai trace listen
+    ```
+  </Step>
+  
+  <Step title="Start Plano with tracing enabled">
+    ```bash
+    planoai up --with-tracing
+    ```
+    
+    Or configure in `config.yaml`:
+    ```yaml
+    tracing:
+      endpoint: http://localhost:4317
+      enabled: true
+    ```
+  </Step>
+  
+  <Step title="Make requests">
+    ```bash
+    curl -X POST http://localhost:10000/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+    ```
+  </Step>
+  
+  <Step title="View traces">
+    ```bash
+    planoai trace
+    ```
+  </Step>
+</Steps>
+
+### Filter by model
+
+```bash
+planoai trace --where "llm.model=gpt-4"
+```
+
+Shows only traces that used GPT-4.
+
+### Find slow requests
+
+```bash
+planoai trace --list --json | jq '.traces[] | select(.spans[].attributes[] | select(.key=="llm.duration_ms" and (.value.intValue | tonumber) > 2000))'
+```
+
+Finds traces with LLM requests taking over 2 seconds.
+
+### Debug routing decisions
+
+```bash
+planoai trace --filter "routing.*" --filter "route.*"
+```
+
+Shows only routing-related attributes:
+```
+├─ 15ms plano(orchestrator) route_selection
+│  ├─ routing.determination_ms: 12
+│  ├─ route.selected_model: claude-3-5-sonnet-20241022
+```
+
+### View errors in the last hour
+
+```bash
+planoai trace --since 1h --where "http.status_code=500"
+```
+
+### Export traces as JSON
+
+```bash
+planoai trace --list --json > traces.json
+```
+
+### Compare two traces
+
+```bash
+planoai trace a1b2c3d4 --json > trace1.json
+planoai trace b2c3d4e5 --json > trace2.json
+diff trace1.json trace2.json
+```
+
+## Trace Storage
+
+Traces are stored in-memory with these limits:
+
+<ParamField path="MAX_TRACES" type="integer" default="50">
+  Maximum number of traces retained.
+  
+  Oldest traces are evicted when the limit is reached.
+</ParamField>
+
+<ParamField path="MAX_SPANS_PER_TRACE" type="integer" default="500">
+  Maximum spans per trace.
+  
+  Prevents memory exhaustion from extremely large traces.
+</ParamField>
+
+<Note>
+The trace store groups spans by parent-child relationships, not just `traceId`. Spans with different `traceId` values but linked via `parentSpanId` are merged into a single logical trace.
+</Note>
+
+## Span Attributes
+
+Common span attributes you'll see:
+
+### HTTP Attributes
+
+- `http.method` — HTTP method (GET, POST, etc.)
+- `http.target` — Request path
+- `http.status_code` — Response status
+- `request_size` — Request body size in bytes
+- `response_size` — Response body size in bytes
+
+### Routing Attributes
+
+- `routing.determination_ms` — Time spent determining route
+- `route.selected_model` — Model chosen by router
+- `selection.agents` — List of selected agents
+- `selection.agent_count` — Number of agents selected
+
+### LLM Attributes
+
+- `llm.model` — Model name sent to provider
+- `llm.is_streaming` — Whether response was streamed
+- `llm.time_to_first_token` — TTFT in milliseconds
+- `llm.duration_ms` — Total LLM request duration
+- `llm.response_bytes` — Response size
+
+### Agent Attributes
+
+- `agent.name` — Agent identifier
+- `agent.sequence` — Order in multi-agent flow
+
+### Error Attributes
+
+- `error.message` — Error description
+- `error.type` — Error category
+- `exception.message` — Exception details
+- `exception.type` — Exception class
+
+## Integration with `planoai up`
+
+Start Plano with built-in tracing:
+
+```bash
+planoai up --with-tracing
+```
+
+This:
+1. Starts a trace listener on port 4317 (or `--tracing-port`)
+2. Configures Plano to send traces to it
+3. Keeps the listener alive in the foreground
+
+Press Ctrl+C to stop both Plano and the trace listener.
+
+<Tip>
+For production, run the trace listener separately:
+
+```bash
+# Terminal 1: Start collector
+planoai trace listen
+
+# Terminal 2: Start Plano (with tracing config in config.yaml)
+planoai up
+
+# Terminal 3: View traces
+planoai trace --follow
+```
+</Tip>
+
+## External Trace Collectors
+
+Plano can send traces to external OTLP collectors:
+
+### Jaeger
+
+```yaml
+tracing:
+  endpoint: http://localhost:4317
+  enabled: true
+```
+
+Run Jaeger:
+```bash
+docker run -d \
+  -p 4317:4317 \
+  -p 16686:16686 \
+  jaegertracing/all-in-one:latest
+```
+
+View traces at http://localhost:16686
+
+### Grafana Tempo
+
+```yaml
+tracing:
+  endpoint: http://tempo:4317
+  enabled: true
+```
+
+### Honeycomb, Datadog, etc.
+
+```yaml
+tracing:
+  endpoint: https://api.honeycomb.io:443
+  enabled: true
+  headers:
+    x-honeycomb-team: YOUR_API_KEY
+```
+
+<Note>
+External collectors provide persistent storage, advanced querying, and dashboards that `planoai trace` doesn't offer.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No traces collected">
+    **Issue:** `planoai trace` shows "No traces found."
+    
+    **Causes:**
+    - Trace listener not running
+    - Plano not configured to send traces
+    - No requests made yet
+    
+    **Solution:**
+    ```bash
+    # Check listener is running
+    planoai trace listen
+    
+    # Start Plano with tracing
+    planoai up --with-tracing
+    
+    # Make a request
+    curl -X POST http://localhost:10000/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "test"}]}'
+    
+    # Check traces
+    planoai trace
+    ```
+  </Accordion>
+  
+  <Accordion title="Port 4317 already in use">
+    **Issue:** `Failed to start trace collector on port 4317`
+    
+    **Solution:**
+    ```bash
+    # Use a different port
+    planoai up --with-tracing --tracing-port 4318
+    
+    # Update trace listener
+    PLANO_TRACE_PORT=4318 planoai trace
+    ```
+    
+    Or stop the existing listener:
+    ```bash
+    planoai trace stop
+    ```
+  </Accordion>
+  
+  <Accordion title="Traces incomplete or missing spans">
+    **Issue:** Trace shows only some spans.
+    
+    **Causes:**
+    - MAX_SPANS_PER_TRACE limit reached (500)
+    - Spans dropped due to network issues
+    - Trace still in progress
+    
+    **Solution:**
+    ```bash
+    # Wait a moment for trace to complete
+    sleep 2
+    planoai trace
+    
+    # Check for network issues
+    planoai logs --debug | grep tracing
+    ```
+  </Accordion>
+  
+  <Accordion title="Filter not matching">
+    **Issue:** `--filter` or `--where` returns no traces.
+    
+    **Solution:**
+    ```bash
+    # List all available attributes
+    planoai trace --json | jq '.traces[0].spans[].attributes[].key' | sort -u
+    
+    # Check spelling and exact key names
+    planoai trace --where "llm.model=gpt-4"  # Correct
+    planoai trace --where "model=gpt-4"      # Wrong (key is llm.model)
+    ```
+  </Accordion>
+  
+  <Accordion title="Interactive mode not working">
+    **Issue:** `--list` shows plain text instead of interactive menu.
+    
+    **Cause:** Not running in a TTY (e.g., in a script or SSH without -t).
+    
+    **Solution:**
+    ```bash
+    # Use non-interactive mode
+    planoai trace --list --no-interactive
+    
+    # Or enable TTY in SSH
+    ssh -t user@host planoai trace --list
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Usage
+
+### Continuous trace monitoring
+
+```bash
+watch -n 2 'planoai trace --list --no-interactive'
+```
+
+Refreshes trace list every 2 seconds.
+
+### Trace-based alerting
+
+```bash
+#!/bin/bash
+while true; do
+  ERROR_COUNT=$(planoai trace --since 1m --where "http.status_code=500" --json | jq '.trace_ids | length')
+  if [ "$ERROR_COUNT" -gt 5 ]; then
+    echo "Alert: $ERROR_COUNT errors in the last minute!"
+    # Send alert via Slack, PagerDuty, etc.
+  fi
+  sleep 60
+done
+```
+
+### Export all traces to external storage
+
+```bash
+planoai trace --list --json | jq -r '.trace_ids[]' | while read trace_id; do
+  planoai trace "$trace_id" --json > "traces/$trace_id.json"
+done
+```
+
+## Performance Impact
+
+Tracing adds minimal overhead:
+
+- **Latency:** ~1-2ms per request
+- **Memory:** ~1KB per span
+- **CPU:** Less than 1% additional load
+
+<Tip>
+In production, consider:
+- Sampling traces (e.g., 10% of requests)
+- Using external collectors with persistent storage
+- Setting appropriate retention policies
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Observability" icon="chart-line" href="/observability/overview">
+    Learn about metrics and monitoring
+  </Card>
+  
+  <Card title="View Logs" icon="file-lines" href="/cli/logs">
+    Combine traces with logs for debugging
+  </Card>
+  
+  <Card title="OpenTelemetry Docs" icon="book" href="https://opentelemetry.io/docs/">
+    Deep dive into OTEL concepts
+  </Card>
+  
+  <Card title="Debugging Guide" icon="bug" href="/troubleshooting/debugging">
+    Master debugging techniques
+  </Card>
+</CardGroup>

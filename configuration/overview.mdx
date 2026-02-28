@@ -1,0 +1,232 @@
+---
+title: Configuration Overview
+description: Learn how to configure Plano for your agentic applications
+---
+
+Plano uses a declarative YAML configuration file to define all aspects of your AI proxy server. This configuration-driven approach makes it easy to version control your infrastructure and deploy consistently across environments.
+
+## Configuration File Structure
+
+A Plano configuration file consists of several key sections:
+
+<CardGroup cols={2}>
+  <Card title="Listeners" icon="ear-listen" href="/configuration/listeners">
+    Define how Plano accepts incoming traffic (model, prompt, or agent mode)
+  </Card>
+  <Card title="Agents" icon="robot" href="/configuration/agents">
+    Register external AI agents that Plano can orchestrate
+  </Card>
+  <Card title="Model Providers" icon="brain" href="/configuration/model-providers">
+    Configure LLM providers and routing preferences
+  </Card>
+  <Card title="Filters" icon="filter" href="/configuration/filters">
+    Set up filter chains for request/response processing
+  </Card>
+</CardGroup>
+
+## Minimal Configuration
+
+Here's the simplest possible Plano configuration:
+
+```yaml
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+```
+
+This configuration:
+- Uses configuration schema version `v0.3.0`
+- Creates a model listener on port 12000
+- Routes requests to OpenAI's GPT-4o-mini model
+
+<Note>
+  Environment variables like `$OPENAI_API_KEY` are automatically substituted at runtime. You can use `$VAR` or `${VAR}` syntax.
+</Note>
+
+## Complete Configuration Example
+
+Here's a more comprehensive example showing multiple features:
+
+<CodeGroup>
+```yaml Complete Example
+version: v0.3.0
+
+# Define external agents
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+  - id: flight_agent
+    url: http://host.docker.internal:10520
+
+# Configure LLM providers
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+
+# Set up listeners
+listeners:
+  - type: agent
+    name: travel_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: Provides weather forecasts for travel planning
+      - id: flight_agent
+        description: Provides flight information and booking
+
+# Configure filters
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    type: mcp
+
+# Enable tracing
+tracing:
+  random_sampling: 100
+  trace_arch_internal: true
+```
+
+```yaml Model Gateway
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+    max_retries: 3
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+
+tracing:
+  random_sampling: 100
+```
+
+```yaml Prompt Gateway
+version: v0.3.0
+
+listeners:
+  - type: prompt
+    name: prompt_listener
+    port: 10000
+
+endpoints:
+  weather_service:
+    endpoint: host.docker.internal:18083
+    connect_timeout: 0.005s
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+
+prompt_targets:
+  - name: get_weather
+    description: Get weather for a location
+    parameters:
+      - name: location
+        type: string
+        required: true
+    endpoint:
+      name: weather_service
+      path: /weather
+      http_method: POST
+```
+</CodeGroup>
+
+## Configuration Schema Versions
+
+Plano supports multiple configuration schema versions:
+
+<ParamField path="version" type="string" required>
+  The configuration schema version. Determines which features are available.
+  
+  **Supported values:**
+  - `v0.3.0` (recommended) - Latest version with full feature support
+  - `v0.1.0` - Legacy format
+  - `0.2.0` - Legacy format
+  - `0.1-beta` - Legacy format
+</ParamField>
+
+<Warning>
+  Always use `v0.3.0` for new configurations. Older versions use deprecated formats (e.g., `ingress_traffic`/`egress_traffic` instead of the modern `listeners` array).
+</Warning>
+
+## Required Fields
+
+Every Plano configuration must include:
+
+1. **version** - Schema version identifier
+2. **listeners** - At least one listener configuration
+
+All other fields are optional, though you'll typically need `model_providers` or `agents` depending on your use case.
+
+## Environment Variable Substitution
+
+Plano supports environment variable substitution in configuration files:
+
+```yaml
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY  # Simple form
+    
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: ${ANTHROPIC_API_KEY}  # Brace form
+
+state_storage:
+  type: postgres
+  connection_string: $DATABASE_URL  # Works anywhere in config
+```
+
+Both `$VAR` and `${VAR}` syntax are supported. This is particularly useful for:
+- API keys and secrets
+- Database connection strings
+- Environment-specific URLs
+
+## Configuration Validation
+
+Plano validates your configuration against a JSON Schema on startup. If validation fails, you'll see detailed error messages indicating:
+
+- Missing required fields
+- Invalid field types
+- Unknown properties
+- Enum value violations
+
+<Tip>
+  Use `planoai up config.yaml` to validate your configuration before deployment. The CLI will check for common issues and verify API keys.
+</Tip>
+
+## Next Steps
+
+<Steps>
+  <Step title="Configure Listeners">
+    Learn how to set up [listeners](/configuration/listeners) for model, prompt, or agent modes
+  </Step>
+  <Step title="Add Model Providers">
+    Configure [model providers](/configuration/model-providers) for LLM routing
+  </Step>
+  <Step title="Set Up Agents">
+    Register [agents](/configuration/agents) for orchestration
+  </Step>
+  <Step title="Add Filters">
+    Implement [filter chains](/configuration/filters) for request processing
+  </Step>
+</Steps>

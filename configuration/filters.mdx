@@ -1,0 +1,667 @@
+---
+title: Filters
+description: Configure filter chains for request and response processing in Plano
+---
+
+Filters are middleware components that process requests and responses as they flow through Plano. They enable powerful preprocessing capabilities like input validation, query rewriting, context augmentation, and guardrails.
+
+## What Are Filters?
+
+Filters are external services that Plano calls to transform or enrich requests before they reach agents or model providers. Common use cases include:
+
+<CardGroup cols={2}>
+  <Card title="Input Validation" icon="shield-check">
+    Sanitize and validate user input, detect malicious content
+  </Card>
+  <Card title="Query Rewriting" icon="pen-to-square">
+    Optimize queries for better retrieval or understanding
+  </Card>
+  <Card title="Context Augmentation" icon="layer-plus">
+    Add relevant context from vector databases or knowledge bases
+  </Card>
+  <Card title="PII Detection" icon="user-shield">
+    Detect and mask personally identifiable information
+  </Card>
+</CardGroup>
+
+## Configuration
+
+Filters are defined in the top-level `filters` array:
+
+```yaml
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    type: mcp
+  
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    type: mcp
+  
+  - id: context_builder
+    url: http://host.docker.internal:10502
+    type: http
+```
+
+### Parameters
+
+<ParamField path="id" type="string" required>
+  A unique identifier for this filter. Used to reference the filter in agent configurations.
+  
+  **Requirements:**
+  - Must be unique across all filters
+  - Use descriptive names indicating the filter's purpose
+  
+  **Examples:** `input_guards`, `query_rewriter`, `context_builder`, `pii_detector`
+</ParamField>
+
+<ParamField path="url" type="string" required>
+  The HTTP URL where the filter service is running.
+  
+  **Format:** `http://host:port` or `https://host:port`
+  
+  **Examples:**
+  - `http://host.docker.internal:10500` (Docker host)
+  - `http://localhost:8080` (local development)
+  - `https://filter.example.com` (production)
+</ParamField>
+
+<ParamField path="type" type="string">
+  The filter protocol type.
+  
+  **Options:**
+  - `mcp` - Model Context Protocol (default)
+  - `http` - Standard HTTP filter
+  
+  **Default:** `mcp`
+  
+  <Info>
+    MCP filters use the Model Context Protocol for standardized tool invocation. HTTP filters use a simpler request/response pattern.
+  </Info>
+</ParamField>
+
+<ParamField path="transport" type="string">
+  The transport mechanism for MCP filters.
+  
+  **Options:**
+  - `streamable-http` - Streamable HTTP transport (default)
+  
+  **Default:** `streamable-http`
+</ParamField>
+
+<ParamField path="tool" type="string">
+  The specific tool name to invoke for MCP filters.
+  
+  **Default:** Same as `id`
+  
+  <Tip>
+    If your MCP server exposes a tool with a different name than the filter ID, use this field to specify it.
+  </Tip>
+</ParamField>
+
+## Filter Types
+
+<Tabs>
+  <Tab title="MCP Filters">
+    MCP (Model Context Protocol) filters are the recommended filter type. They provide a standardized interface for tool invocation:
+    
+    ```yaml
+    filters:
+      - id: input_guards
+        url: http://host.docker.internal:10500
+        type: mcp
+        transport: streamable-http
+        # tool: input_guards (defaults to id)
+    ```
+    
+    **Benefits:**
+    - Standardized protocol
+    - Tool discovery and introspection
+    - Structured input/output
+    - Better error handling
+  </Tab>
+  
+  <Tab title="HTTP Filters">
+    HTTP filters use a simple request/response pattern:
+    
+    ```yaml
+    filters:
+      - id: custom_filter
+        url: http://host.docker.internal:10503
+        type: http
+    ```
+    
+    **Use cases:**
+    - Simple transformations
+    - Integration with existing HTTP services
+    - Custom processing logic
+  </Tab>
+</Tabs>
+
+## Filter Chains
+
+Filters are applied to agents using the `filter_chain` parameter. Filters execute sequentially in the order specified:
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://host.docker.internal:10505
+
+filters:
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    type: mcp
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    type: mcp
+  - id: context_builder
+    url: http://host.docker.internal:10502
+    type: mcp
+
+listeners:
+  - type: agent
+    name: rag_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: Virtual assistant for retrieval augmented generation tasks
+        filter_chain:
+          - input_guards      # Step 1: Validate input
+          - query_rewriter    # Step 2: Optimize query
+          - context_builder   # Step 3: Add context
+```
+
+### Execution Flow
+
+<Steps>
+  <Step title="Request Received">
+    User request arrives at the listener
+  </Step>
+  <Step title="Agent Selection">
+    Orchestrator selects the appropriate agent
+  </Step>
+  <Step title="Filter Chain Execution">
+    Filters execute sequentially:
+    1. `input_guards` validates and sanitizes input
+    2. `query_rewriter` optimizes the query
+    3. `context_builder` adds relevant context
+  </Step>
+  <Step title="Agent Invocation">
+    The transformed request is sent to the agent
+  </Step>
+  <Step title="Response">
+    Agent response is returned to the client
+  </Step>
+</Steps>
+
+<Warning>
+  Filters execute in order. Each filter receives the output of the previous filter. If a filter fails, the chain stops and an error is returned.
+</Warning>
+
+## Complete Examples
+
+### RAG System with MCP Filters
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://host.docker.internal:10505
+
+filters:
+  # Validate and sanitize input
+  - id: input_guards
+    url: http://host.docker.internal:10500
+    type: mcp
+    # transport: streamable-http (default)
+    # tool: input_guards (default - same as id)
+  
+  # Rewrite query for better retrieval
+  - id: query_rewriter
+    url: http://host.docker.internal:10501
+    type: mcp
+    # transport: streamable-http (default)
+    # tool: query_rewriter (default - same as id)
+  
+  # Add context from vector database
+  - id: context_builder
+    url: http://host.docker.internal:10502
+    type: mcp
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+
+model_aliases:
+  fast-llm:
+    target: gpt-4o-mini
+  smart-llm:
+    target: gpt-4o
+
+listeners:
+  - type: agent
+    name: rag_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: Virtual assistant for retrieval augmented generation tasks
+        filter_chain:
+          - input_guards
+          - query_rewriter
+          - context_builder
+
+tracing:
+  random_sampling: 100
+```
+
+### HTTP Filters for Custom Processing
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: rag_agent
+    url: http://rag-agents:10505
+
+filters:
+  # HTTP filter for input validation
+  - id: input_guards
+    url: http://rag-agents:10500
+    type: http
+  
+  # HTTP filter for query transformation
+  - id: query_rewriter
+    url: http://rag-agents:10501
+    type: http
+  
+  # HTTP filter for context augmentation
+  - id: context_builder
+    url: http://rag-agents:10502
+    type: http
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: agent_1
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: rag_agent
+        description: Virtual assistant for retrieval augmented generation tasks
+        filter_chain:
+          - input_guards
+          - query_rewriter
+          - context_builder
+
+tracing:
+  random_sampling: 100
+```
+
+### Multiple Agents with Different Filter Chains
+
+```yaml
+version: v0.3.0
+
+agents:
+  - id: public_agent
+    url: http://host.docker.internal:10505
+  - id: internal_agent
+    url: http://host.docker.internal:10506
+
+filters:
+  - id: public_input_validator
+    url: http://host.docker.internal:10500
+    type: mcp
+  - id: pii_detector
+    url: http://host.docker.internal:10501
+    type: mcp
+  - id: internal_context
+    url: http://host.docker.internal:10502
+    type: mcp
+  - id: compliance_checker
+    url: http://host.docker.internal:10503
+    type: mcp
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+listeners:
+  - type: agent
+    name: multi_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      # Public-facing agent with PII detection
+      - id: public_agent
+        description: Public customer service assistant
+        filter_chain:
+          - public_input_validator
+          - pii_detector
+      
+      # Internal agent with compliance checking
+      - id: internal_agent
+        description: Internal employee assistant with access to sensitive data
+        filter_chain:
+          - internal_context
+          - compliance_checker
+
+tracing:
+  random_sampling: 100
+```
+
+## Filter Use Cases
+
+<AccordionGroup>
+  <Accordion title="Input Validation and Sanitization">
+    Validate and clean user input before processing:
+    
+    ```yaml
+    filters:
+      - id: input_validator
+        url: http://host.docker.internal:10500
+        type: mcp
+    
+    agents:
+      - id: assistant
+        filter_chain:
+          - input_validator
+    ```
+    
+    **What it does:**
+    - Remove malicious content
+    - Validate input format
+    - Sanitize special characters
+    - Detect prompt injection attempts
+  </Accordion>
+  
+  <Accordion title="Query Rewriting for Better Retrieval">
+    Optimize user queries for semantic search:
+    
+    ```yaml
+    filters:
+      - id: query_rewriter
+        url: http://host.docker.internal:10501
+        type: mcp
+    
+    agents:
+      - id: rag_agent
+        filter_chain:
+          - query_rewriter
+    ```
+    
+    **What it does:**
+    - Expand abbreviations
+    - Add synonyms
+    - Reformulate questions
+    - Extract key entities
+  </Accordion>
+  
+  <Accordion title="Context Augmentation">
+    Add relevant context from external sources:
+    
+    ```yaml
+    filters:
+      - id: context_builder
+        url: http://host.docker.internal:10502
+        type: mcp
+    
+    agents:
+      - id: rag_agent
+        filter_chain:
+          - context_builder
+    ```
+    
+    **What it does:**
+    - Query vector database
+    - Retrieve relevant documents
+    - Add context to prompt
+    - Enrich with metadata
+  </Accordion>
+  
+  <Accordion title="PII Detection and Masking">
+    Detect and protect personally identifiable information:
+    
+    ```yaml
+    filters:
+      - id: pii_detector
+        url: http://host.docker.internal:10503
+        type: mcp
+    
+    agents:
+      - id: public_agent
+        filter_chain:
+          - pii_detector
+    ```
+    
+    **What it does:**
+    - Detect PII (names, emails, SSN, etc.)
+    - Mask or redact sensitive data
+    - Log PII access for compliance
+    - Replace with placeholders
+  </Accordion>
+  
+  <Accordion title="Compliance and Policy Enforcement">
+    Enforce organizational policies and compliance rules:
+    
+    ```yaml
+    filters:
+      - id: compliance_checker
+        url: http://host.docker.internal:10504
+        type: mcp
+    
+    agents:
+      - id: internal_agent
+        filter_chain:
+          - compliance_checker
+    ```
+    
+    **What it does:**
+    - Check against policy rules
+    - Verify access permissions
+    - Audit sensitive operations
+    - Block prohibited content
+  </Accordion>
+  
+  <Accordion title="Prompt Injection Detection">
+    Detect and block prompt injection attacks:
+    
+    ```yaml
+    filters:
+      - id: prompt_guard
+        url: http://host.docker.internal:10505
+        type: mcp
+    
+    agents:
+      - id: production_agent
+        filter_chain:
+          - prompt_guard
+    ```
+    
+    **What it does:**
+    - Detect jailbreak attempts
+    - Identify prompt injections
+    - Block malicious patterns
+    - Return safe error messages
+  </Accordion>
+</AccordionGroup>
+
+## Filter Protocol
+
+### MCP Filter Interface
+
+MCP filters implement the Model Context Protocol. Plano invokes them as tools:
+
+**Request to filter:**
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "input_guards",
+    "arguments": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "What's the weather today?"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Response from filter:**
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"messages\":[{\"role\":\"user\",\"content\":\"What's the weather today?\"}]}"
+    }
+  ]
+}
+```
+
+### HTTP Filter Interface
+
+HTTP filters receive and return JSON:
+
+**Request to filter:**
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather today?"
+    }
+  ]
+}
+```
+
+**Response from filter:**
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather today?"
+    }
+  ]
+}
+```
+
+<Info>
+  Filters can modify messages, add system prompts, inject context, or transform the request in any way. The output of one filter becomes the input to the next.
+</Info>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Order filters by dependency">
+    Execute filters in logical order:
+    
+    ```yaml
+    filter_chain:
+      - input_guards      # 1. Validate first
+      - query_rewriter    # 2. Then optimize
+      - context_builder   # 3. Finally add context
+    ```
+    
+    Don't add context before validation, or rewrite before validation.
+  </Accordion>
+  
+  <Accordion title="Keep filters focused">
+    Each filter should do one thing well:
+    - ✅ `input_validator` - validates input
+    - ✅ `query_rewriter` - rewrites queries
+    - ❌ `do_everything` - validates, rewrites, adds context
+  </Accordion>
+  
+  <Accordion title="Handle filter failures gracefully">
+    Implement proper error handling in filters:
+    - Return clear error messages
+    - Don't crash on invalid input
+    - Provide fallback behavior
+    - Log errors for debugging
+  </Accordion>
+  
+  <Accordion title="Use MCP for standardization">
+    Prefer MCP filters over HTTP when possible:
+    - Standardized protocol
+    - Better tooling support
+    - Easier debugging
+    - Built-in introspection
+  </Accordion>
+  
+  <Accordion title="Monitor filter performance">
+    Track filter latency and errors:
+    - Enable tracing to see filter execution time
+    - Set alerts for high latency
+    - Monitor error rates
+    - Optimize slow filters
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Filter not being called">
+  If your filter isn't executing:
+  
+  1. Verify the filter `id` in `filter_chain` matches the `filters` array
+  2. Check that the agent using the filter is being selected
+  3. Enable tracing: `planoai trace` to see filter execution
+  4. Check logs: `planoai logs` for filter-related errors
+</Accordion>
+
+<Accordion title="Filter connection errors">
+  If Plano can't connect to your filter:
+  
+  1. Verify the filter service is running
+  2. Check the URL and port are correct
+  3. For Docker, use `host.docker.internal` for host services
+  4. Test the filter endpoint directly with `curl`
+  5. Check network policies and firewalls
+</Accordion>
+
+<Accordion title="Filter timeouts">
+  If filter requests timeout:
+  
+  1. Optimize filter performance
+  2. Increase listener timeout if needed
+  3. Check for slow database queries in the filter
+  4. Consider caching in the filter
+  5. Monitor filter resource usage
+</Accordion>
+
+<Accordion title="Filter output not being used">
+  If the agent doesn't receive filter output:
+  
+  1. Verify filter returns valid JSON
+  2. Check that filter preserves the `messages` structure
+  3. Test filter output format matches expectations
+  4. Enable debug logging to see transformed messages
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Advanced Configuration" icon="gear" href="/configuration/advanced">
+    Configure tracing, rate limits, and state storage
+  </Card>
+  <Card title="Configuration Overview" icon="book" href="/configuration/overview">
+    Back to configuration overview
+  </Card>
+</CardGroup>

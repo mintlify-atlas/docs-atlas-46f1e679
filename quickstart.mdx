@@ -1,80 +1,458 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get up and running with Plano in minutes. Learn to use Plano as an LLM gateway and build multi-agent applications.
 ---
 
-## Get started in three steps
+Plano is the AI-native proxy server and data plane for agentic apps. This quickstart shows you how to:
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- Use Plano as a model proxy (Gateway) to standardize access to multiple LLM providers
+- Build multi-agent applications with intelligent orchestration
+- Get automatic observability with zero instrumentation
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+This quickstart focuses on wiring and configuring Plano. The full agent implementations are available in the [demos/agent_orchestration/travel_agents/](https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/travel_agents) directory.
 </Note>
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+<Steps>
+  <Step title="Docker System">
+    Install [Docker](https://docs.docker.com/get-started/get-docker/) v24 or later
+  </Step>
+  
+  <Step title="Docker Compose">
+    Install [Docker Compose](https://docs.docker.com/compose/install/) v2.29 or later
+  </Step>
+  
+  <Step title="Python">
+    Install [Python](https://www.python.org/downloads/) v3.10 or later
+  </Step>
+</Steps>
+
+### Install Plano CLI
+
+The Plano CLI allows you to manage and interact with Plano efficiently.
+
+<Tip>
+We recommend using **uv** for fast, reliable Python package management. Install uv if you haven't already:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+</Tip>
+
+<Tabs>
+  <Tab title="Install with uv (Recommended)">
+    ```bash
+    uv tool install planoai==0.4.9
+    ```
+  </Tab>
+  
+  <Tab title="Install with pip">
+    ```bash
+    python -m venv venv
+    source venv/bin/activate   # On Windows: venv\Scripts\activate
+    pip install planoai==0.4.9
+    ```
+  </Tab>
+</Tabs>
+
+## Use Plano as a Model Proxy (Gateway)
+
+Plano can act as a unified gateway to multiple LLM providers, giving you a single OpenAI-compatible interface for all your models.
+
+<Steps>
+  <Step title="Create Plano config file">
+    Create a file named `plano_config.yaml` with the following content:
+
+    ```yaml plano_config.yaml
+    version: v0.3.0
+
+    listeners:
+      - type: model
+        name: model_1
+        address: 0.0.0.0
+        port: 12000
+
+    model_providers:
+      - access_key: $OPENAI_API_KEY
+        model: openai/gpt-4o
+        default: true
+
+      - access_key: $ANTHROPIC_API_KEY
+        model: anthropic/claude-sonnet-4-5
+    ```
+
+    This configuration:
+    - Creates a model listener on port 12000
+    - Configures OpenAI and Anthropic as providers
+    - Sets OpenAI's GPT-4o as the default model
+  </Step>
+
+  <Step title="Set up environment variables">
+    Ensure you have your API keys set as environment variables (or defined in a `.env` file):
+
+    ```bash
+    export OPENAI_API_KEY="your-openai-key"
+    export ANTHROPIC_API_KEY="your-anthropic-key"
+    ```
+  </Step>
+
+  <Step title="Start Plano">
+    Launch Plano with your configuration file:
+
+    ```bash
+    planoai up plano_config.yaml
+    # Or if installed with uv: uvx planoai up plano_config.yaml
+    ```
+
+    You should see output similar to:
+
+    ```
+    2024-12-05 11:24:51,288 - planoai.main - INFO - Starting plano cli version: 0.4.9
+    2024-12-05 11:24:51,825 - planoai.utils - INFO - Schema validation successful!
+    2024-12-05 11:24:51,825 - planoai.main - INFO - Starting plano
+    ...
+    2024-12-05 11:25:16,131 - planoai.core - INFO - Container is healthy!
+    ```
+  </Step>
+
+  <Step title="Interact with the LLM Gateway">
+    <Tabs>
+      <Tab title="curl">
+        ```bash
+        curl --header 'Content-Type: application/json' \
+          --data '{"messages": [{"role": "user","content": "What is the capital of France?"}], "model": "gpt-4o"}' \
+          http://localhost:12000/v1/chat/completions
+        ```
+
+        Expected response:
+
+        ```json
+        {
+          "model": "gpt-4o-2024-08-06",
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "The capital of France is Paris."
+              }
+            }
+          ]
+        }
+        ```
+      </Tab>
+
+      <Tab title="Python">
+        ```python
+        from openai import OpenAI
+
+        # Point to Plano's gateway instead of OpenAI directly
+        client = OpenAI(
+            api_key='--',  # API keys are configured in Plano
+            base_url="http://127.0.0.1:12000/v1"
+        )
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+        print("Response:", response.choices[0].message.content)
+        ```
+      </Tab>
+    </Tabs>
+
+    <Note>
+    When the requested model is not found in the configuration, Plano will select the default model. You can also use `"model": "--"` to let Plano choose.
+    </Note>
+  </Step>
+</Steps>
+
+## Build Multi-Agent Applications
+
+Plano excels at orchestrating multiple agents to handle complex workflows. Let's build a travel assistant that combines weather and flight information.
+
+### How it works
+
+1. **Define agents** in YAML with natural language descriptions
+2. **Write simple agent code** as HTTP services using any framework
+3. **Route LLM calls** through Plano's gateway for unified access
+4. **Let Plano orchestrate** - it automatically routes requests to the right agents
+
+<Steps>
+  <Step title="Create the orchestration config">
+    Create `travel_config.yaml`:
+
+    ```yaml travel_config.yaml
+    version: v0.3.0
+
+    agents:
+      - id: weather_agent
+        url: http://host.docker.internal:10510
+      - id: flight_agent
+        url: http://host.docker.internal:10520
+
+    model_providers:
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        default: true
+      - model: openai/gpt-4o-mini
+        access_key: $OPENAI_API_KEY
+
+    listeners:
+      - type: agent
+        name: travel_assistant
+        port: 8001
+        router: plano_orchestrator_v1
+        agents:
+          - id: weather_agent
+            description: |
+              Gets real-time weather and forecasts for any city worldwide.
+              Handles: "What's the weather in Paris?", "Will it rain in Tokyo?"
+
+          - id: flight_agent
+            description: |
+              Searches flights between airports with live status and schedules.
+              Handles: "Flights from NYC to LA", "Show me flights to Seattle"
+
+    tracing:
+      random_sampling: 100
+    ```
+
+    <Note>
+    The `plano_orchestrator_v1` router is powered by a 4B-parameter model that intelligently routes requests based on natural language descriptions.
+    </Note>
+  </Step>
+
+  <Step title="Implement your agents">
+    Agents are simple HTTP servers that expose an OpenAI-compatible `/v1/chat/completions` endpoint. Here's a simplified weather agent:
+
+    <CodeGroup>
+    ```python weather_agent.py
+    from fastapi import FastAPI, Request
+    from fastapi.responses import StreamingResponse
+    from openai import AsyncOpenAI
+
+    app = FastAPI()
+
+    # Point to Plano's LLM gateway - it handles model routing
+    llm = AsyncOpenAI(
+        base_url="http://localhost:12001/v1",
+        api_key="EMPTY"
+    )
+
+    @app.post("/v1/chat/completions")
+    async def chat(request: Request):
+        body = await request.json()
+        messages = body.get("messages", [])
+        
+        # Extract location from user message
+        location = await extract_location(messages)
+        
+        # Fetch weather data from API
+        weather_data = await get_weather_data(location)
+        
+        # Stream response back through Plano
+        async def generate():
+            stream = await llm.chat.completions.create(
+                model="openai/gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"Weather data: {weather_data}"
+                    },
+                    *messages
+                ],
+                stream=True
+            )
+            async for chunk in stream:
+                yield f"data: {chunk.model_dump_json()}\n\n"
+        
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream"
+        )
+
+    if __name__ == "__main__":
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=10510)
+    ```
+
+    ```python flight_agent.py
+    from fastapi import FastAPI, Request
+    from fastapi.responses import StreamingResponse
+    from openai import AsyncOpenAI
+
+    app = FastAPI()
+
+    llm = AsyncOpenAI(
+        base_url="http://localhost:12001/v1",
+        api_key="EMPTY"
+    )
+
+    @app.post("/v1/chat/completions")
+    async def chat(request: Request):
+        body = await request.json()
+        messages = body.get("messages", [])
+        
+        # Extract origin and destination
+        route = await extract_flight_route(messages)
+        
+        # Fetch flight data from API
+        flight_data = await get_flights(
+            route["origin"],
+            route["destination"]
+        )
+        
+        # Stream response through Plano
+        async def generate():
+            stream = await llm.chat.completions.create(
+                model="openai/gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"Flight data: {flight_data}"
+                    },
+                    *messages
+                ],
+                stream=True
+            )
+            async for chunk in stream:
+                yield f"data: {chunk.model_dump_json()}\n\n"
+        
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream"
+        )
+
+    if __name__ == "__main__":
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=10520)
+    ```
+    </CodeGroup>
+
+    <Tip>
+    Full working implementations with real API integrations are available in the [demos/agent_orchestration/travel_agents/](https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/travel_agents) directory.
+    </Tip>
+  </Step>
+
+  <Step title="Start your agents and Plano">
+    In separate terminal windows:
+
+    ```bash Terminal 1: Weather Agent
+    python weather_agent.py
+    ```
+
+    ```bash Terminal 2: Flight Agent
+    python flight_agent.py
+    ```
+
+    ```bash Terminal 3: Plano
+    planoai up travel_config.yaml
+    ```
+  </Step>
+
+  <Step title="Query your multi-agent system">
+    Send a request that requires both agents:
+
+    ```bash
+    curl http://localhost:8001/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "I want to travel from NYC to Paris next week. What is the weather like there, and can you find me some flights?"
+          }
+        ]
+      }'
+    ```
+
+    **What happens:**
+    - Plano's orchestrator analyzes the request
+    - Routes the weather portion to `weather_agent` for Paris weather
+    - Routes the flight portion to `flight_agent` for NYC to Paris flights
+    - Combines responses into a complete travel plan
+
+    <Note>
+    You didn't write any routing logic. Plano's orchestrator uses the agent descriptions to intelligently route each part of the request.
+    </Note>
+  </Step>
+</Steps>
+
+## What You Get for Free
+
+### Automatic Observability
+
+Every request is traced end-to-end with OpenTelemetry - no instrumentation code needed. Plano captures:
+
+- Agent routing decisions
+- LLM calls and responses
+- Latency metrics
+- Token usage
+- Error traces
+
+### Model Agility
+
+Switch between LLM providers without changing application code:
+
+```yaml
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+  - model: anthropic/claude-sonnet-4-5
+    access_key: $ANTHROPIC_API_KEY
+  - model: gemini/gemini-2.0-flash-exp
+    access_key: $GOOGLE_API_KEY
+```
+
+### Unified Interface
+
+All LLM providers are accessed through a single OpenAI-compatible API:
+
+```python
+# Same code works for any provider
+client = OpenAI(base_url="http://localhost:12000/v1")
+response = client.chat.completions.create(
+    model="anthropic/claude-sonnet-4-5",  # Just change the model name
+    messages=[...]
+)
+```
+
+## What You Didn't Have to Build
+
+| Infrastructure Concern | Without Plano | With Plano |
+|---------|---------------|------------|
+| **Agent Orchestration** | Write intent classifier + routing logic | Declare agent descriptions in YAML |
+| **Model Management** | Handle each provider's API quirks | Unified LLM APIs with state management |
+| **Rich Tracing** | Instrument every service with OTEL | Automatic end-to-end traces and logs |
+| **Learning Signals** | Build pipeline to capture/export spans | Zero-code agentic signals |
+| **Adding Agents** | Update routing code, test, redeploy | Add to config, restart |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="LLM Routing" icon="route" href="/guides/llm-router">
+    Route by model name, alias, or intelligent preferences
+  </Card>
+  
+  <Card title="Agent Orchestration" icon="sitemap" href="/guides/orchestration">
+    Build complex multi-agent workflows
+  </Card>
+  
+  <Card title="Filter Chains" icon="shield" href="/concepts/filter-chain">
+    Add guardrails, moderation, and memory hooks
+  </Card>
+  
+  <Card title="Observability" icon="chart-line" href="/guides/observability">
+    Explore traces, metrics, and logs
+  </Card>
+</CardGroup>
+
+<Warning>
+Plano and the Arch family of LLMs (like Plano-Orchestrator-4B) are hosted free of charge in the US-central region for development. To scale to production, you can either run these LLMs locally or contact us on [Discord](https://discord.gg/pGZf2gcwEc) for API keys.
+</Warning>

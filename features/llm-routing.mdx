@@ -1,0 +1,431 @@
+---
+title: LLM Routing
+description: Intelligent model routing with support for 15+ providers, semantic aliases, and preference-aligned routing
+---
+
+Plano's LLM routing capabilities help you centrally define, secure, observe, and manage model usage across your applications. Built on Envoy's reliable cluster subsystem, Plano manages egress traffic to models with intelligent routing, retry and fail-over mechanisms, ensuring high availability and fault tolerance.
+
+## Multi-Provider Support
+
+Connect to 15+ different AI providers through a unified interface. Whether you're using OpenAI, Anthropic, Azure OpenAI, local Ollama models, or any OpenAI-compatible provider, Plano provides seamless integration with enterprise-grade features.
+
+<CardGroup cols={3}>
+  <Card title="OpenAI" icon="openai">
+    Native integration with all OpenAI models including GPT-4, GPT-5, and o-series
+  </Card>
+  <Card title="Anthropic" icon="anthropic">
+    First-class support for Claude models including Sonnet and Opus
+  </Card>
+  <Card title="Azure OpenAI" icon="microsoft">
+    Enterprise deployment with Azure-hosted models
+  </Card>
+  <Card title="AWS Bedrock" icon="aws">
+    Access to Amazon Nova and other Bedrock models
+  </Card>
+  <Card title="Google Gemini" icon="google">
+    Integration with Google's Gemini models
+  </Card>
+  <Card title="Ollama" icon="server">
+    Self-hosted local models for privacy and control
+  </Card>
+  <Card title="DeepSeek" icon="brain">
+    Access to DeepSeek's reasoning models
+  </Card>
+  <Card title="Mistral AI" icon="sparkles">
+    Integration with Mistral's open and commercial models
+  </Card>
+  <Card title="Together AI" icon="users">
+    Access to open-source models via Together AI
+  </Card>
+</CardGroup>
+
+## Three Routing Strategies
+
+Plano offers three powerful routing approaches to optimize model selection:
+
+<Tabs>
+  <Tab title="Model-Based Routing">
+    Direct routing to specific models using provider/model names.
+
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+        default: true
+      
+      - model: anthropic/claude-sonnet-4-20250514
+        access_key: $ANTHROPIC_API_KEY
+      
+      - model: ollama/llama3.1
+        base_url: http://host.docker.internal:11434
+    ```
+
+    **Use when:** You need direct control over which model handles each request.
+  </Tab>
+  <Tab title="Alias-Based Routing">
+    Semantic routing using custom aliases that map to underlying models.
+
+    ```yaml
+    model_providers:
+      - model: openai/gpt-4o-mini
+        access_key: $OPENAI_API_KEY
+      - model: openai/gpt-4o
+        access_key: $OPENAI_API_KEY
+      - model: anthropic/claude-sonnet-4-20250514
+        access_key: $ANTHROPIC_API_KEY
+
+    model_aliases:
+      # Semantic versioning
+      arch.summarize.v1:
+        target: gpt-4o-mini
+      
+      arch.reasoning.v1:
+        target: gpt-4o
+      
+      arch.creative.v1:
+        target: claude-sonnet-4-20250514
+      
+      # Functional aliases
+      fast-model:
+        target: gpt-4o-mini
+      
+      smart-model:
+        target: gpt-4o
+    ```
+
+    **Use when:** You want semantic naming, version control, and the ability to swap models without changing client code.
+  </Tab>
+  <Tab title="Preference-Aligned Routing">
+    Intelligent routing using routing preferences that match user intent to model capabilities.
+
+    ```yaml
+    model_providers:
+      - model: openai/gpt-5-2025-08-07
+        access_key: $OPENAI_API_KEY
+        routing_preferences:
+          - name: code generation
+            description: generating new code snippets, functions, or boilerplate
+      
+      - model: openai/gpt-4.1-2025-04-14
+        access_key: $OPENAI_API_KEY
+        routing_preferences:
+          - name: code understanding
+            description: understand and explain existing code snippets
+      
+      - model: anthropic/claude-sonnet-4-5
+        access_key: $ANTHROPIC_API_KEY
+        default: true
+    ```
+
+    **Use when:** You want Plano to automatically route requests to the best model based on the task requirements.
+  </Tab>
+</Tabs>
+
+## Configuration Examples
+
+<CodeGroup>
+```yaml Multi-Provider Setup
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+
+model_providers:
+  # OpenAI Models
+  - model: openai/gpt-5-mini-2025-08-07
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+  
+  # Anthropic Models
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+  
+  # Azure OpenAI
+  - model: azure_openai/gpt-5-mini
+    access_key: $AZURE_API_KEY
+    base_url: https://katanemo.openai.azure.com
+  
+  # AWS Bedrock
+  - model: amazon_bedrock/us.amazon.nova-premier-v1:0
+    access_key: $AWS_BEARER_TOKEN_BEDROCK
+    base_url: https://bedrock-runtime.us-west-2.amazonaws.com
+  
+  # Ollama (Local)
+  - model: ollama/llama3.1
+    base_url: http://host.docker.internal:11434
+
+tracing:
+  random_sampling: 100
+```
+
+```yaml With Model Aliases
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+  
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+
+model_aliases:
+  # Semantic versioning
+  arch.summarize.v1:
+    target: gpt-4o-mini
+  
+  arch.reasoning.v1:
+    target: gpt-4o
+  
+  arch.creative.v1:
+    target: claude-sonnet-4-20250514
+  
+  # Environment-specific
+  dev.chat.v1:
+    target: gpt-4o-mini
+  
+  prod.chat.v1:
+    target: gpt-4o
+  
+  # Task-specific
+  code-reviewer:
+    target: gpt-4o
+  
+  document-summarizer:
+    target: gpt-4o-mini
+```
+
+```yaml Preference-Based Routing
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+
+model_providers:
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+    default: true
+  
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: code understanding
+        description: understand and explain existing code snippets, functions, or libraries
+  
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+    routing_preferences:
+      - name: code generation
+        description: generating new code snippets, functions, or boilerplate
+
+tracing:
+  random_sampling: 100
+```
+
+```yaml Wildcard Configuration
+version: v0.3.0
+
+listeners:
+  - type: model
+    name: model_listener
+    port: 12000
+
+model_providers:
+  # Support all OpenAI models with a single entry
+  - model: openai/*
+    access_key: $OPENAI_API_KEY
+  
+  # Support all Anthropic models
+  - model: anthropic/*
+    access_key: $ANTHROPIC_API_KEY
+    default: true
+  
+  # Specific model configurations override wildcards
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    routing_preferences:
+      - name: code review
+        description: reviewing and analyzing code quality
+```
+</CodeGroup>
+
+## Client Usage
+
+Plano provides a unified OpenAI-compatible API, so you can use your existing client libraries without changes:
+
+<CodeGroup>
+```python OpenAI SDK
+from openai import OpenAI
+
+# Point to Plano's model listener
+client = OpenAI(base_url="http://127.0.0.1:12000/")
+
+# Use model name directly
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+# Use model alias
+response = client.chat.completions.create(
+    model="arch.summarize.v1",
+    messages=[{"role": "user", "content": "Summarize this document..."}]
+)
+
+# Switch providers seamlessly
+response = client.chat.completions.create(
+    model="claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Write a creative story..."}]
+)
+```
+
+```python Anthropic SDK
+from anthropic import Anthropic
+
+# Point to Plano's model listener
+client = Anthropic(base_url="http://127.0.0.1:12000/")
+
+# Use Claude models through Plano
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+# Use aliases
+response = client.messages.create(
+    model="arch.creative.v1",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Write a poem..."}]
+)
+```
+
+```bash cURL
+# Direct model usage
+curl -X POST http://127.0.0.1:12000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+
+# Using model alias
+curl -X POST http://127.0.0.1:12000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fast-model",
+    "messages": [{"role": "user", "content": "Quick question..."}]
+  }'
+```
+</CodeGroup>
+
+## Key Benefits
+
+<Steps>
+  <Step title="Provider Flexibility">
+    Switch between providers without changing client code. Add new providers or upgrade models with configuration changes only.
+  </Step>
+  <Step title="Cost Optimization">
+    Route simple queries to fast, cheap models (like gpt-4o-mini) and complex tasks to powerful models (like gpt-4o or claude-sonnet).
+  </Step>
+  <Step title="Performance Optimization">
+    Use routing preferences to automatically select the best model based on task requirements—code generation, analysis, creative writing, etc.
+  </Step>
+  <Step title="Environment Management">
+    Configure different models for dev, staging, and production environments using aliases like `dev.chat.v1` and `prod.chat.v1`.
+  </Step>
+  <Step title="Unified Observability">
+    All LLM calls flow through Plano, giving you centralized metrics, tracing, and logging across all providers.
+  </Step>
+</Steps>
+
+## Advanced Features
+
+<Info>
+Plano normalizes response formats across all providers, so your application receives consistent data structures whether the request went to OpenAI, Anthropic, AWS Bedrock, or a local Ollama model.
+</Info>
+
+### Wildcard Model Configuration
+
+Automatically configure all models from a provider using the wildcard syntax:
+
+```yaml
+model_providers:
+  # Support all OpenAI models
+  - model: openai/*
+    access_key: $OPENAI_API_KEY
+  
+  # Support all Anthropic models  
+  - model: anthropic/*
+    access_key: $ANTHROPIC_API_KEY
+```
+
+### Environment-Specific Routing
+
+Use aliases to configure different models per environment:
+
+```yaml
+model_aliases:
+  # Development - use faster/cheaper models
+  dev.chat.v1:
+    target: gpt-4o-mini
+  
+  # Production - use more capable models
+  prod.chat.v1:
+    target: gpt-4o
+  
+  # Staging - test new models
+  staging.chat.v1:
+    target: claude-sonnet-4-20250514
+```
+
+### Semantic Versioning
+
+Implement version control for gradual model upgrades:
+
+```yaml
+model_aliases:
+  # Current production version
+  arch.summarize.v1:
+    target: gpt-4o-mini
+  
+  # Beta version for testing
+  arch.summarize.v2:
+    target: gpt-4o
+  
+  # Stable alias pointing to latest
+  arch.summarize.latest:
+    target: gpt-4o-mini
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent Orchestration" icon="robot" href="/features/agent-orchestration">
+    Learn how agents use LLM routing for model calls
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/features/observability">
+    Monitor LLM usage, costs, and performance across providers
+  </Card>
+  <Card title="Filter Chains" icon="filter" href="/features/filter-chains">
+    Add guardrails and request enrichment before LLM calls
+  </Card>
+  <Card title="Configuration Reference" icon="book" href="/configuration/model-providers">
+    Complete model provider configuration reference
+  </Card>
+</CardGroup>

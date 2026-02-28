@@ -1,0 +1,439 @@
+---
+title: planoai logs
+description: Stream access and debug logs from Plano
+---
+
+The `planoai logs` command streams logs from the running Plano container, showing request/response activity and internal operations.
+
+## Basic Usage
+
+```bash
+planoai logs
+```
+
+Shows recent access logs and exits.
+
+## Command Signature
+
+```bash
+planoai logs [OPTIONS]
+```
+
+## Options
+
+<ParamField path="--follow" type="flag" default="false">
+  Continuously stream logs in real-time (like `tail -f`).
+  
+  ```bash
+  planoai logs --follow
+  ```
+  
+  Press Ctrl+C to stop streaming.
+</ParamField>
+
+<ParamField path="--debug" type="flag" default="false">
+  Include detailed debug logs from the Plano gateway (Envoy + brightstaff).
+  
+  ```bash
+  planoai logs --debug
+  ```
+  
+  Shows:
+  - Envoy proxy logs
+  - brightstaff server logs
+  - WASM filter logs
+  - Internal routing decisions
+  
+  <Warning>
+  Debug logs can be very verbose. Use sparingly in production.
+  </Warning>
+</ParamField>
+
+## Log Types
+
+Plano produces two types of logs:
+
+### Access Logs
+
+HTTP request/response activity processed by Plano:
+
+```json
+{
+  "timestamp": "2024-02-28T10:15:23.456Z",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 200,
+  "duration_ms": 1234,
+  "request_id": "req_abc123",
+  "model": "claude-3-5-sonnet-20241022",
+  "tokens": {
+    "input": 150,
+    "output": 420
+  }
+}
+```
+
+These logs show:
+- All API requests routed through Plano
+- Response status codes
+- Latency metrics
+- Token usage
+- Model routing decisions
+
+### Debug Logs
+
+Internal operations (only with `--debug`):
+
+```
+[brightstaff] INFO  routing: Evaluating routing strategy for request req_abc123
+[envoy] debug: [wasm] [filter_chain] executing filter: input_guard
+[prompt_gateway] INFO  Guardrail check passed: no PII detected
+[llm_gateway] INFO  Routing to provider: anthropic, model: claude-3-5-sonnet-20241022
+```
+
+## Examples
+
+### View recent logs
+
+```bash
+planoai logs
+```
+
+**Output:**
+```json
+{"timestamp":"2024-02-28T10:15:23.456Z","method":"POST","path":"/v1/chat/completions","status":200,"duration_ms":1234}
+{"timestamp":"2024-02-28T10:15:24.123Z","method":"POST","path":"/v1/chat/completions","status":200,"duration_ms":987}
+```
+
+### Stream logs continuously
+
+```bash
+planoai logs --follow
+```
+
+Logs appear in real-time as requests are processed. Press Ctrl+C to exit.
+
+### Debug routing issues
+
+```bash
+planoai logs --debug --follow
+```
+
+**Output:**
+```
+[brightstaff] INFO  Starting routing evaluation
+[brightstaff] DEBUG Route preferences: {"latency": 0.7, "cost": 0.3}
+[brightstaff] INFO  Selected model: claude-3-5-sonnet-20241022 (score: 0.85)
+[llm_gateway] INFO  Forwarding to: https://api.anthropic.com/v1/messages
+{"timestamp":"2024-02-28T10:15:23.456Z","status":200,"duration_ms":1234}
+```
+
+Use debug logs to:
+- Understand routing decisions
+- Debug filter chain execution
+- Diagnose performance issues
+- Trace request flow through components
+
+### Combine with grep for filtering
+
+```bash
+planoai logs --follow | grep "status": 500
+```
+
+Show only failed requests.
+
+```bash
+planoai logs --follow | jq '.duration_ms'
+```
+
+Extract just the latency values.
+
+## Log Format
+
+Access logs are JSON-formatted with these fields:
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp of the request.
+</ResponseField>
+
+<ResponseField name="method" type="string" required>
+  HTTP method (GET, POST, etc.).
+</ResponseField>
+
+<ResponseField name="path" type="string" required>
+  Request path (e.g., `/v1/chat/completions`).
+</ResponseField>
+
+<ResponseField name="status" type="integer" required>
+  HTTP status code (200, 404, 500, etc.).
+</ResponseField>
+
+<ResponseField name="duration_ms" type="number" required>
+  Total request duration in milliseconds.
+</ResponseField>
+
+<ResponseField name="request_id" type="string">
+  Unique request identifier for tracing.
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  Resolved model name after routing.
+</ResponseField>
+
+<ResponseField name="provider" type="string">
+  LLM provider (anthropic, openai, google, etc.).
+</ResponseField>
+
+<ResponseField name="tokens" type="object">
+  Token usage breakdown:
+  - `input`: Input tokens consumed
+  - `output`: Output tokens generated
+  - `total`: Total tokens
+</ResponseField>
+
+<ResponseField name="cost" type="number">
+  Estimated cost in USD (if cost tracking enabled).
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message (only present on failures).
+</ResponseField>
+
+## Log Levels
+
+Control log verbosity with the `LOG_LEVEL` environment variable:
+
+```bash
+LOG_LEVEL=debug planoai up
+planoai logs --debug --follow
+```
+
+<ParamField path="error" type="enum">
+  Only critical errors.
+</ParamField>
+
+<ParamField path="warning" type="enum">
+  Errors and warnings.
+</ParamField>
+
+<ParamField path="info" type="enum" default>
+  Normal operational logs (default).
+</ParamField>
+
+<ParamField path="debug" type="enum">
+  Verbose debugging information.
+</ParamField>
+
+<ParamField path="trace" type="enum">
+  Extremely verbose (includes all spans).
+</ParamField>
+
+## Multiprocess Logging
+
+When using `--debug`, logs are streamed from multiple processes:
+
+1. **Access logs** (always shown)
+2. **Gateway logs** (Envoy + brightstaff, only with `--debug`)
+
+Both streams are merged in real-time.
+
+<Note>
+The CLI uses Python multiprocessing to stream both log sources simultaneously. Press Ctrl+C to stop all streams.
+</Note>
+
+## Persistence
+
+Logs are **ephemeral** by default:
+
+- Stored in the Docker container's stdout/stderr
+- Lost when the container is removed
+- Not persisted to disk
+
+<Tip>
+**To persist logs**, redirect output:
+
+```bash
+planoai logs --follow > plano.log 2>&1
+```
+
+Or configure Docker logging drivers in production:
+
+```bash
+docker run \
+  --log-driver=json-file \
+  --log-opt max-size=100m \
+  --log-opt max-file=3 \
+  ...
+```
+</Tip>
+
+## Log Analysis
+
+### Calculate average latency
+
+```bash
+planoai logs | jq -r '.duration_ms' | awk '{sum+=$1; count++} END {print "Avg:", sum/count "ms"}'
+```
+
+### Count requests by status code
+
+```bash
+planoai logs | jq -r '.status' | sort | uniq -c
+```
+
+### Find slowest requests
+
+```bash
+planoai logs | jq -r '[.duration_ms, .path] | @tsv' | sort -rn | head -10
+```
+
+### Track token usage
+
+```bash
+planoai logs | jq -r '.tokens.total' | awk '{sum+=$1} END {print "Total tokens:", sum}'
+```
+
+## Comparison with Docker Logs
+
+| Command | Plano CLI | Docker CLI |
+|---------|-----------|------------|
+| View logs | `planoai logs` | `docker logs plano` |
+| Stream logs | `planoai logs --follow` | `docker logs -f plano` |
+| Debug logs | `planoai logs --debug` | *(not available)* |
+| Since timestamp | *(not supported)* | `docker logs --since 1h plano` |
+| Tail N lines | *(not supported)* | `docker logs --tail 100 plano` |
+
+<Tip>
+For advanced filtering (by timestamp, line count), use `docker logs` directly:
+
+```bash
+docker logs --since 1h --tail 500 plano
+```
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No logs appearing">
+    **Issue:** Running `planoai logs` shows nothing.
+    
+    **Cause:** 
+    - Plano isn't running
+    - No requests have been processed
+    
+    **Solution:**
+    ```bash
+    # Check if Plano is running
+    docker ps | grep plano
+    
+    # If not running, start it
+    planoai up
+    
+    # Make a test request
+    curl -X POST http://localhost:10000/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+    
+    # Check logs again
+    planoai logs
+    ```
+  </Accordion>
+  
+  <Accordion title="Logs truncated or incomplete">
+    **Issue:** Logs cut off mid-request.
+    
+    **Cause:** Using `planoai logs` without `--follow` shows a snapshot.
+    
+    **Solution:**
+    ```bash
+    # Stream continuously
+    planoai logs --follow
+    ```
+  </Accordion>
+  
+  <Accordion title="Too much debug output">
+    **Issue:** `--debug` produces overwhelming logs.
+    
+    **Solution:**
+    ```bash
+    # Filter to specific component
+    planoai logs --debug --follow | grep brightstaff
+    
+    # Or reduce log level
+    LOG_LEVEL=info planoai up
+    planoai logs --debug --follow
+    ```
+  </Accordion>
+  
+  <Accordion title="JSON parsing errors">
+    **Issue:** `jq` fails on log output.
+    
+    **Cause:** Debug logs intermix text logs with JSON.
+    
+    **Solution:**
+    ```bash
+    # Filter only JSON lines
+    planoai logs | grep '^{' | jq '.status'
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Production Logging
+
+For production deployments:
+
+<Steps>
+  <Step title="Use external log aggregation">
+    Send logs to a centralized system:
+    
+    ```bash
+    docker run \
+      --log-driver=syslog \
+      --log-opt syslog-address=tcp://logs.example.com:514 \
+      ...
+    ```
+    
+    Or use Fluentd, Logstash, CloudWatch, etc.
+  </Step>
+  
+  <Step title="Set appropriate log level">
+    ```bash
+    LOG_LEVEL=warning planoai up
+    ```
+    
+    Reduces noise in production.
+  </Step>
+  
+  <Step title="Enable structured logging">
+    Access logs are already JSON. For debug logs, configure structured output in supervisord.
+  </Step>
+  
+  <Step title="Set up log rotation">
+    ```bash
+    docker run \
+      --log-opt max-size=50m \
+      --log-opt max-file=5 \
+      ...
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Trace Requests" icon="route" href="/cli/trace">
+    Use distributed tracing for deeper insights
+  </Card>
+  
+  <Card title="Observability" icon="chart-line" href="/observability/overview">
+    Set up metrics and monitoring
+  </Card>
+  
+  <Card title="Debug Guide" icon="bug" href="/troubleshooting/debugging">
+    Learn debugging techniques
+  </Card>
+  
+  <Card title="Docker Logs" icon="docker" href="https://docs.docker.com/config/containers/logging/">
+    Configure Docker logging drivers
+  </Card>
+</CardGroup>

@@ -1,0 +1,599 @@
+---
+title: Components
+description: Deep dive into Plano's Rust crates and WASM filters
+---
+
+## Overview
+
+Plano's implementation is organized as a Cargo workspace with **5 core crates**. Two compile to WASM for Envoy integration, and three are native Rust binaries/libraries.
+
+```
+crates/
+├── prompt_gateway/    (WASM) - Prompt processing & guardrails
+├── llm_gateway/       (WASM) - LLM format translation & rate limiting
+├── brightstaff/       (native binary) - Agentic control plane
+├── common/            (library) - Shared utilities
+└── hermesllm/         (library) - Multi-provider LLM abstractions
+```
+
+<Info>
+  Total: **104 Rust source files** implementing the complete data plane.
+</Info>
+
+## WASM Filters
+
+### prompt_gateway (WASM)
+
+**Target:** `wasm32-wasip1`  
+**Type:** `cdylib` (dynamic library for Envoy)  
+**Location:** `crates/prompt_gateway/`
+
+Proxy-WASM filter for prompt processing, guardrails, and filter chain coordination.
+
+#### Key Responsibilities
+
+<CardGroup cols={2}>
+  <Card title="Prompt Processing" icon="message">
+    Parse and validate incoming prompt requests before routing
+  </Card>
+  
+  <Card title="Guardrails" icon="shield">
+    Apply input validation, PII detection, and safety checks
+  </Card>
+  
+  <Card title="Filter Chains" icon="link">
+    Coordinate multi-stage prompt transformation pipelines
+  </Card>
+  
+  <Card title="Metrics" icon="chart-simple">
+    Collect per-request metrics for observability
+  </Card>
+</CardGroup>
+
+#### Dependencies
+
+```toml
+proxy-wasm = "0.2.1"          # Proxy-WASM SDK for Envoy
+common = { path = "../common" } # Shared configuration and utilities
+serde_json = "1.0"            # JSON parsing
+md5 = "0.7.0"                 # Hashing for deduplication
+governor = "0.6.3"            # Rate limiting
+sha2 = "0.10.8"               # Cryptographic hashing
+```
+
+#### Entry Point
+
+**File:** `crates/prompt_gateway/src/lib.rs`
+
+```rust
+proxy_wasm::main! {{
+    proxy_wasm::set_log_level(LogLevel::Trace);
+    proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
+        Box::new(FilterContext::new())
+    });
+}}
+```
+
+#### Module Structure
+
+- `context.rs` - Root context initialization
+- `filter_context.rs` - Per-filter configuration and state
+- `http_context.rs` - HTTP request/response processing
+- `stream_context.rs` - Streaming response handling
+- `metrics.rs` - Prometheus-style metrics collection
+- `tools.rs` - Utility functions for prompt manipulation
+
+<Tip>
+  Compile with: `cargo build --release --target=wasm32-wasip1 -p prompt_gateway`
+</Tip>
+
+### llm_gateway (WASM)
+
+**Target:** `wasm32-wasip1`  
+**Type:** `cdylib`  
+**Location:** `crates/llm_gateway/`
+
+Proxy-WASM filter for LLM request/response handling, format translation, and egress rate limiting.
+
+#### Key Responsibilities
+
+<CardGroup cols={2}>
+  <Card title="Format Translation" icon="language">
+    Convert between OpenAI, Anthropic, Gemini, Mistral, and other provider formats
+  </Card>
+  
+  <Card title="Rate Limiting" icon="gauge">
+    Per-provider token bucket limiting to prevent quota exhaustion
+  </Card>
+  
+  <Card title="TTFT Metrics" icon="stopwatch">
+    Measure time-to-first-token for streaming responses
+  </Card>
+  
+  <Card title="Token Counting" icon="hashtag">
+    Track input/output token usage per request
+  </Card>
+</CardGroup>
+
+#### Dependencies
+
+```toml
+proxy-wasm = "0.2.1"              # Proxy-WASM SDK
+hermesllm = { path = "../hermesllm" } # Provider abstractions
+common = { path = "../common" }   # Shared utilities
+bytes = "1.10"                    # Efficient byte buffer handling
+governor = "0.6.3"                # Rate limiting
+```
+
+#### Provider Support via hermesllm
+
+The filter uses the `hermesllm` library to translate between provider formats:
+
+- **OpenAI** - `/v1/chat/completions`, `/v1/completions`
+- **Anthropic** - `/v1/messages`
+- **Google Gemini** - `/v1/models/*/generateContent`
+- **Mistral** - `/v1/chat/completions`
+- **Groq** - `/v1/chat/completions`
+- **DeepSeek** - `/v1/chat/completions`
+- **xAI (Grok)** - `/v1/chat/completions`
+- **Together.ai** - `/v1/chat/completions`
+- **AWS Bedrock** - `/model/*/invoke`
+- **Azure OpenAI** - `/openai/deployments/*/chat/completions`
+- **GitHub Models** - `/v1/chat/completions`
+
+#### Entry Point
+
+**File:** `crates/llm_gateway/src/lib.rs`
+
+```rust
+proxy_wasm::main! {{
+    proxy_wasm::set_log_level(LogLevel::Trace);
+    proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
+        Box::new(FilterContext::new())
+    });
+}}
+```
+
+#### Module Structure
+
+- `filter_context.rs` - Filter configuration and lifecycle
+- `stream_context.rs` - Request/response processing and format translation
+- `metrics.rs` - LLM-specific metrics (TTFT, tokens, latency)
+
+<Note>
+  The WASM filter runs **inside Envoy's worker threads**, so format translation happens with zero network hops.
+</Note>
+
+## Native Components
+
+### brightstaff (Native Binary)
+
+**Target:** Native (Linux x86_64)  
+**Type:** Binary executable  
+**Location:** `crates/brightstaff/`
+
+The core application server that implements Plano's agentic control plane.
+
+#### Architecture
+
+**File:** `crates/brightstaff/src/main.rs`
+
+Brightstaff is a **Tokio-based async HTTP server** that:
+
+1. Binds to `0.0.0.0:9091` (configurable via `BIND_ADDRESS` env var)
+2. Loads `plano_config.yaml` configuration
+3. Initializes OpenTelemetry tracing
+4. Routes requests to specialized handlers
+5. Manages conversation state (in-memory or PostgreSQL)
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let bind_address = env::var("BIND_ADDRESS")
+        .unwrap_or_else(|_| BIND_ADDRESS.to_string());
+    
+    let config: Configuration = serde_yaml::from_str(&config_contents)
+        .expect("Failed to parse plano_config.yaml");
+    
+    let _tracer_provider = init_tracer(config.tracing.as_ref());
+    
+    // ... handler setup ...
+    
+    let listener = TcpListener::bind(bind_address).await?;
+    // ... serve requests ...
+}
+```
+
+#### Module Structure
+
+<Tabs>
+  <Tab title="Handlers">
+    **Location:** `src/handlers/`
+    
+    HTTP request handlers for different execution paths:
+    
+    - `agent_chat_completions.rs` - Agent orchestration and filter chains
+    - `llm.rs` - Direct LLM routing
+    - `function_calling.rs` - Prompt target dispatch
+    - `models.rs` - `/v1/models` endpoint (list available models)
+    - `pipeline_processor.rs` - Filter chain execution logic
+    - `router_chat.rs` - Model routing with preference selection
+    - `agent_selector.rs` - Agent selection strategies
+    - `response_handler.rs` - Response formatting and streaming
+    - `jsonrpc.rs` - JSON-RPC support for MCP filters
+  </Tab>
+  
+  <Tab title="Router">
+    **Location:** `src/router/`
+    
+    Routing and orchestration services:
+    
+    - `llm_router.rs` - Model alias resolution and provider selection
+    - `plano_orchestrator.rs` - Agent orchestration service
+    - `router_model.rs` - Routing decision models
+    - `router_model_v1.rs` - V1 routing algorithm
+    - `orchestrator_model.rs` - Orchestration decision models
+    - `orchestrator_model_v1.rs` - V1 orchestration algorithm
+  </Tab>
+  
+  <Tab title="State">
+    **Location:** `src/state/`
+    
+    Conversation state management:
+    
+    - `memory.rs` - `MemoryConversationalStorage` (in-memory HashMap)
+    - `postgresql.rs` - `PostgreSQLConversationStorage` (durable storage)
+    - `mod.rs` - `StateStorage` trait for abstraction
+    
+    Implements OpenAI-compatible `/v1/responses` API for stateful conversations.
+  </Tab>
+  
+  <Tab title="Signals">
+    **Location:** `src/signals/`
+    
+    Quality and safety signal analysis:
+    
+    - Loop detection in agent call chains
+    - Repetition scoring for outputs
+    - Quality indicators and hallucination flags
+    - Real-time decision support for routing
+  </Tab>
+  
+  <Tab title="Tracing">
+    **Location:** `src/tracing/`
+    
+    OpenTelemetry integration:
+    
+    - OTLP gRPC exporter configuration
+    - W3C traceparent header injection
+    - Per-request span creation
+    - Trace context propagation to upstream services
+  </Tab>
+</Tabs>
+
+#### Key Dependencies
+
+```toml
+tokio = { version = "1.44.2", features = ["full"] }
+hyper = { version = "1.6.0", features = ["full"] }
+reqwest = { version = "0.12.15", features = ["stream"] }
+opentelemetry = "0.31"
+opentelemetry-otlp = { version = "0.31", features = ["trace", "grpc-tonic"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+hermesllm = { path = "../hermesllm" }
+common = { path = "../common" }
+```
+
+<Info>
+  Brightstaff is **100% async** - it handles thousands of concurrent requests without blocking threads.
+</Info>
+
+### common (Library)
+
+**Target:** Native  
+**Type:** Library crate  
+**Location:** `crates/common/`
+
+Shared utilities and abstractions used across all crates.
+
+#### Module Structure
+
+```
+common/src/
+├── api.rs            - API type definitions
+├── configuration.rs  - Config file parsing (agents, listeners, providers)
+├── consts.rs         - Shared constants (paths, defaults)
+├── errors.rs         - Error types with thiserror
+├── http.rs           - HTTP utilities and client helpers
+├── llm_providers.rs  - LLM provider abstractions
+├── path.rs           - Path matching and routing logic
+├── pii.rs            - PII detection (regex-based)
+├── ratelimit.rs      - Rate limiting with governor
+├── routing.rs        - Routing decision logic
+├── stats.rs          - Metrics and statistics
+├── tokenizer.rs      - Token counting with tiktoken-rs
+├── traces.rs         - Trace context types
+├── tracing.rs        - Tracing configuration
+└── utils.rs          - General utilities
+```
+
+#### Key Features
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="file-code">
+    Parse and validate `plano_config.yaml` with serde
+  </Card>
+  
+  <Card title="LLM Providers" icon="server">
+    Abstract provider-specific details (URLs, auth, models)
+  </Card>
+  
+  <Card title="Token Counting" icon="calculator">
+    Use `tiktoken-rs` for accurate OpenAI-style token counts
+  </Card>
+  
+  <Card title="PII Detection" icon="eye-slash">
+    Regex-based detection of emails, SSNs, credit cards
+  </Card>
+</CardGroup>
+
+#### Dependencies
+
+```toml
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9.34"
+tiktoken-rs = "0.5.9"         # Token counting
+governor = "0.6.3"            # Rate limiting
+hermesllm = { path = "../hermesllm" }
+hyper = "1.0"
+http-body-util = "0.1"
+```
+
+<Note>
+  The `common` crate is used by **both WASM and native** targets, so it must be `no_std` compatible where necessary.
+</Note>
+
+### hermesllm (Library)
+
+**Target:** Native  
+**Type:** Library crate  
+**Location:** `crates/hermesllm/`
+
+Unified abstractions for handling LLM API requests and responses across multiple providers.
+
+#### Design Philosophy
+
+Provides a **type-safe enum-based approach** that:
+
+- **Type Safety** - All provider operations checked at compile time
+- **Runtime Selection** - Provider determined from headers or config
+- **Clean Abstractions** - Common traits hide provider-specific details
+- **Extensibility** - New providers added by extending enums
+
+#### Core Types
+
+<Tabs>
+  <Tab title="Provider Enums">
+    ```rust
+    pub enum ProviderId {
+        OpenAI,
+        Anthropic,
+        Gemini,
+        Mistral,
+        Groq,
+        Deepseek,
+        Grok,      // xAI
+        GitHub,
+        // ... more providers
+    }
+    
+    pub enum ProviderRequestType {
+        OpenAI(ChatCompletionsRequest),
+        Anthropic(AnthropicRequest),
+        Gemini(GeminiRequest),
+        // ... per-provider types
+    }
+    
+    pub enum ProviderResponseType {
+        OpenAI(ChatCompletionsResponse),
+        Anthropic(AnthropicResponse),
+        // ... per-provider types
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Traits">
+    ```rust
+    /// Common interface for all request types
+    pub trait ProviderRequest {
+        fn model(&self) -> String;
+        fn get_recent_user_message(&self) -> Option<String>;
+        fn is_streaming(&self) -> bool;
+        fn messages(&self) -> &[Message];
+    }
+    
+    /// Common interface for all response types
+    pub trait ProviderResponse {
+        fn extract_usage_counts(&self) -> Option<(u32, u32, u32)>;
+        fn model(&self) -> Option<String>;
+        fn content(&self) -> Option<String>;
+    }
+    
+    /// Interface for streaming chunks
+    pub trait ProviderStreamResponse {
+        fn content_delta(&self) -> Option<String>;
+        fn is_final(&self) -> bool;
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Usage Example">
+    ```rust
+    use hermesllm::providers::{ProviderRequestType, ProviderRequest, ProviderId};
+    
+    // Parse request with provider context
+    let request_bytes = r#"{"model": "gpt-4", "messages": [...]}"
+    let request = ProviderRequestType::try_from((
+        request_bytes.as_bytes(),
+        &ProviderId::OpenAI
+    ))?;
+    
+    // Access via common trait
+    println!("Model: {}", request.model());
+    println!("Streaming: {}", request.is_streaming());
+    
+    // Convert to different provider
+    let anthropic_request = request.to_anthropic_format()?;
+    ```
+  </Tab>
+</Tabs>
+
+#### Streaming Support
+
+```rust
+use hermesllm::providers::ProviderStreamResponseIter;
+
+// Create iterator from SSE data
+let mut stream = ProviderStreamResponseIter::try_from((
+    sse_data,
+    &ProviderId::OpenAI
+))?;
+
+// Process chunks
+for chunk in stream {
+    let chunk = chunk?;
+    if let Some(content) = chunk.content_delta() {
+        print!("{}", content);
+    }
+    if chunk.is_final() {
+        break;
+    }
+}
+```
+
+#### Dependencies
+
+```toml
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+```
+
+<Tip>
+  See `crates/hermesllm/README.md` for complete API documentation and examples.
+</Tip>
+
+## Build Process
+
+### WASM Filters
+
+WASM filters **must** target `wasm32-wasip1` (WASI preview 1):
+
+```bash
+cd crates
+cargo build --release --target=wasm32-wasip1 -p llm_gateway -p prompt_gateway
+```
+
+Output:
+- `target/wasm32-wasip1/release/llm_gateway.wasm`
+- `target/wasm32-wasip1/release/prompt_gateway.wasm`
+
+<Warning>
+  Do NOT use `wasm32-unknown-unknown` - Envoy requires WASI support for file I/O and environment access.
+</Warning>
+
+### Native Binary
+
+Brightstaff compiles to the native target:
+
+```bash
+cd crates
+cargo build --release -p brightstaff
+```
+
+Output:
+- `target/release/brightstaff`
+
+### Docker Image
+
+The complete system is packaged into a Docker image:
+
+```bash
+docker build -t katanemo/plano:latest .
+```
+
+Includes:
+- Envoy proxy binary
+- `llm_gateway.wasm` and `prompt_gateway.wasm` filters
+- `brightstaff` binary
+- Python CLI (`planoai`)
+- Supervisord for process management
+
+## Process Management
+
+**File:** `config/supervisord.conf`
+
+Supervisord runs two processes:
+
+```ini
+[program:brightstaff]
+command=RUST_LOG=${LOG_LEVEL:-info} /app/brightstaff
+
+[program:envoy]
+command=envoy -c /etc/envoy.env_sub.yaml \
+  --component-log-level wasm:${LOG_LEVEL:-info}
+```
+
+<Info>
+  Both processes log to stdout with prefixes `[brightstaff]` and `[plano_logs]` for easy filtering.
+</Info>
+
+## Testing
+
+### Unit Tests
+
+```bash
+cd crates
+cargo test --lib
+```
+
+Runs tests in:
+- `common/src/**/*_test.rs`
+- `hermesllm/src/**/*_test.rs`
+- `brightstaff/src/handlers/integration_tests.rs`
+
+### E2E Tests
+
+**Location:** `tests/e2e/`
+
+Requires a built Docker image:
+
+```bash
+./tests/e2e/run_e2e_tests.sh
+```
+
+Executes:
+- `test_prompt_gateway.py` - Prompt processing and guardrails
+- `test_model_alias_routing.py` - Model routing and aliases
+- `test_openai_responses_api_client.py` - Stateful conversations
+- `test_openai_responses_api_client_with_state.py` - PostgreSQL state
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Envoy Integration" icon="diagram-nested" href="/architecture/envoy-integration">
+    Learn how WASM filters integrate with Envoy
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure agents, listeners, and providers
+  </Card>
+  
+  <Card title="Development" icon="code" href="/development/setup">
+    Set up a local development environment
+  </Card>
+  
+  <Card title="Contributing" icon="github" href="/contributing">
+    Contribute to Plano's development
+  </Card>
+</CardGroup>

@@ -1,0 +1,773 @@
+---
+title: Advanced Configuration
+description: Configure tracing, rate limits, state storage, and advanced Plano features
+---
+
+Plano provides advanced configuration options for observability, state management, security, and fine-tuning behavior. This page covers features beyond basic routing and orchestration.
+
+## Tracing
+
+Plano supports OpenTelemetry-compatible distributed tracing for observability:
+
+```yaml
+tracing:
+  random_sampling: 100
+  trace_arch_internal: true
+  span_attributes:
+    header_prefixes:
+      - x-acme-
+    static:
+      service.name: plano
+      deployment.environment: production
+```
+
+### Tracing Parameters
+
+<ParamField path="random_sampling" type="integer">
+  Percentage of requests to trace (0-100).
+  
+  **Default:** `0` (no tracing)
+  
+  **Examples:**
+  - `100` - Trace all requests (development)
+  - `10` - Trace 10% of requests (production)
+  - `1` - Trace 1% of requests (high-traffic production)
+  
+  <Warning>
+    Setting this to 100 in high-traffic production environments can generate significant trace data. Start with lower values (1-10) and increase as needed.
+  </Warning>
+</ParamField>
+
+<ParamField path="trace_arch_internal" type="boolean">
+  Whether to include internal Plano operations in traces. Useful for debugging Plano itself.
+  
+  **Default:** `false`
+  
+  <Info>
+    Enable this when debugging routing decisions, filter execution, or orchestration behavior.
+  </Info>
+</ParamField>
+
+<ParamField path="span_attributes.header_prefixes" type="array">
+  List of HTTP header prefixes to capture as span attributes. Useful for capturing custom application headers.
+  
+  **Example:**
+  ```yaml
+  span_attributes:
+    header_prefixes:
+      - x-acme-          # Captures x-acme-user-id, x-acme-tenant, etc.
+      - x-request-       # Captures x-request-id, x-request-source, etc.
+  ```
+</ParamField>
+
+<ParamField path="span_attributes.static" type="object">
+  Static key-value pairs to add to all spans. Useful for identifying the service, environment, or deployment.
+  
+  **Example:**
+  ```yaml
+  span_attributes:
+    static:
+      service.name: plano
+      service.version: 0.4.7
+      deployment.environment: production
+      deployment.region: us-west-2
+  ```
+</ParamField>
+
+### Complete Tracing Example
+
+```yaml
+version: v0.3.0
+
+listeners:
+  - type: agent
+    name: travel_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: weather_agent
+        description: Provides weather information
+
+agents:
+  - id: weather_agent
+    url: http://host.docker.internal:10510
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+tracing:
+  # Trace all requests during development
+  random_sampling: 100
+  
+  # Include Plano's internal operations
+  trace_arch_internal: true
+  
+  # Capture custom headers and add static attributes
+  span_attributes:
+    header_prefixes:
+      - x-acme-           # Application-specific headers
+      - x-trace-          # Tracing-related headers
+    static:
+      service.name: plano
+      service.version: 0.4.7
+      deployment.environment: staging
+      team: platform
+```
+
+### Viewing Traces
+
+Use the Plano CLI to view traces:
+
+```bash
+# View recent traces
+planoai trace
+
+# View traces for specific time range
+planoai trace --start "2026-02-28 10:00" --end "2026-02-28 11:00"
+
+# Filter by trace ID
+planoai trace --id abc123
+```
+
+<Tip>
+  Traces show the complete request flow including routing decisions, filter execution, agent selection, and model provider calls.
+</Tip>
+
+## State Storage
+
+State storage enables multi-turn conversations with persistent context using the `/v1/responses` API:
+
+```yaml
+state_storage:
+  type: memory
+```
+
+### State Storage Parameters
+
+<ParamField path="type" type="string" required>
+  The storage backend type.
+  
+  **Options:**
+  - `memory` - In-memory storage (ephemeral, lost on restart)
+  - `postgres` - PostgreSQL database (persistent)
+  
+  <Warning>
+    Memory storage is suitable for development and testing only. Use PostgreSQL for production to ensure conversation history persists across restarts.
+  </Warning>
+</ParamField>
+
+<ParamField path="connection_string" type="string">
+  PostgreSQL connection string. Required when `type: postgres`. Supports environment variable substitution.
+  
+  **Format:** `postgresql://[user[:password]@][host][:port][/database]`
+  
+  **Examples:**
+  - `$DATABASE_URL`
+  - `${POSTGRES_CONNECTION_STRING}`
+  - `postgresql://user:pass@localhost:5432/plano`
+  
+  <Info>
+    Use environment variables to avoid storing credentials in configuration files.
+  </Info>
+</ParamField>
+
+### Memory Storage (Development)
+
+```yaml
+version: v0.3.0
+
+listeners:
+  - type: agent
+    name: conversation_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: assistant
+        description: Conversational assistant with memory
+
+agents:
+  - id: assistant
+    url: http://localhost:10510
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+# In-memory state storage (ephemeral)
+state_storage:
+  type: memory
+
+tracing:
+  random_sampling: 100
+```
+
+### PostgreSQL Storage (Production)
+
+```yaml
+version: v0.3.0
+
+listeners:
+  - type: agent
+    name: conversation_service
+    port: 8001
+    router: plano_orchestrator_v1
+    agents:
+      - id: assistant
+        description: Conversational assistant with persistent memory
+
+agents:
+  - id: assistant
+    url: http://localhost:10510
+
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+
+# PostgreSQL state storage (persistent)
+state_storage:
+  type: postgres
+  connection_string: $DATABASE_URL
+
+tracing:
+  random_sampling: 100
+```
+
+<Info>
+  State storage is only used with the `/v1/responses` API. The standard `/v1/chat/completions` endpoint is stateless.
+</Info>
+
+## Rate Limiting
+
+Rate limiting controls request throughput based on model and selector criteria:
+
+```yaml
+ratelimits:
+  - model: openai/gpt-4o
+    selector:
+      key: user_id
+      value: premium_user
+    limit:
+      tokens: 1000000
+      unit: day
+  
+  - model: openai/gpt-4o-mini
+    selector:
+      key: user_id
+      value: free_user
+    limit:
+      tokens: 10000
+      unit: day
+```
+
+### Rate Limit Parameters
+
+<ParamField path="model" type="string" required>
+  The model identifier to apply rate limits to. Use the same format as in `model_providers`.
+  
+  **Examples:**
+  - `openai/gpt-4o`
+  - `anthropic/claude-sonnet-4-20250514`
+  - `openai/*` (all OpenAI models)
+</ParamField>
+
+<ParamField path="selector" type="object" required>
+  Criteria for selecting which requests to rate limit.
+  
+  **Properties:**
+  - `key` (string, required) - The selector key (e.g., `user_id`, `tenant_id`)
+  - `value` (string, required) - The selector value to match
+  
+  <Info>
+    Selectors match against request metadata. Use custom headers or request parameters to pass selector values.
+  </Info>
+</ParamField>
+
+<ParamField path="limit" type="object" required>
+  The rate limit configuration.
+  
+  **Properties:**
+  - `tokens` (integer, required) - Maximum number of tokens allowed
+  - `unit` (string, required) - Time unit for the limit
+  
+  **Supported units:**
+  - `second`
+  - `minute`
+  - `hour`
+  - `day`
+  - `month`
+</ParamField>
+
+### Rate Limiting Examples
+
+<Tabs>
+  <Tab title="Per-User Limits">
+    ```yaml
+    ratelimits:
+      # Premium users: 1M tokens/day on GPT-4
+      - model: openai/gpt-4o
+        selector:
+          key: user_tier
+          value: premium
+        limit:
+          tokens: 1000000
+          unit: day
+      
+      # Free users: 10K tokens/day on GPT-4 Mini
+      - model: openai/gpt-4o-mini
+        selector:
+          key: user_tier
+          value: free
+        limit:
+          tokens: 10000
+          unit: day
+    ```
+  </Tab>
+  
+  <Tab title="Per-Tenant Limits">
+    ```yaml
+    ratelimits:
+      # Enterprise tenant
+      - model: openai/gpt-4o
+        selector:
+          key: tenant_id
+          value: enterprise_123
+        limit:
+          tokens: 10000000
+          unit: month
+      
+      # Startup tenant
+      - model: openai/gpt-4o
+        selector:
+          key: tenant_id
+          value: startup_456
+        limit:
+          tokens: 100000
+          unit: month
+    ```
+  </Tab>
+  
+  <Tab title="Global Limits">
+    ```yaml
+    ratelimits:
+      # Global rate limit across all users
+      - model: openai/gpt-4o
+        selector:
+          key: global
+          value: all
+        limit:
+          tokens: 1000000
+          unit: hour
+    ```
+  </Tab>
+</Tabs>
+
+## System Prompt
+
+Set a global system prompt for all requests:
+
+```yaml
+system_prompt: |
+  You are a helpful assistant that provides accurate and concise information.
+  Always cite your sources when providing factual information.
+  If you're unsure about something, say so rather than guessing.
+```
+
+<Info>
+  The system prompt is prepended to all conversations. Individual prompt targets or agents can override this with their own system prompts.
+</Info>
+
+## Endpoints
+
+Define reusable HTTP endpoints for prompt targets:
+
+```yaml
+endpoints:
+  weather_service:
+    endpoint: host.docker.internal:18083
+    connect_timeout: 0.005s
+    protocol: http
+  
+  payment_api:
+    endpoint: api.example.com:443
+    protocol: https
+    http_host: api.example.com
+  
+  currency_api:
+    endpoint: api.frankfurter.dev:443
+    protocol: https
+```
+
+### Endpoint Parameters
+
+<ParamField path="endpoint" type="string" required>
+  The host and port of the endpoint.
+  
+  **Format:** `host:port`
+  
+  **Examples:**
+  - `host.docker.internal:18083`
+  - `api.example.com:443`
+  - `localhost:8080`
+</ParamField>
+
+<ParamField path="protocol" type="string">
+  The protocol to use.
+  
+  **Options:**
+  - `http` (default)
+  - `https`
+</ParamField>
+
+<ParamField path="connect_timeout" type="string">
+  Connection timeout duration.
+  
+  **Format:** Duration string (e.g., `5s`, `500ms`)
+  
+  **Default:** `5s`
+  
+  **Examples:**
+  - `0.005s` (5 milliseconds)
+  - `10s` (10 seconds)
+</ParamField>
+
+<ParamField path="http_host" type="string">
+  Custom HTTP Host header to send with requests.
+  
+  **Example:** `api.example.com`
+</ParamField>
+
+## Overrides
+
+Fine-tune Plano's behavior with override settings:
+
+```yaml
+overrides:
+  prompt_target_intent_matching_threshold: 0.6
+  optimize_context_window: true
+  use_agent_orchestrator: true
+  upstream_connect_timeout: 10s
+  upstream_tls_ca_path: /etc/ssl/certs/ca-certificates.crt
+```
+
+### Override Parameters
+
+<ParamField path="prompt_target_intent_matching_threshold" type="number">
+  Confidence threshold (0.0-1.0) for prompt target intent matching. Higher values require stronger matches.
+  
+  **Default:** `0.7`
+  
+  **Range:** `0.0` to `1.0`
+  
+  **Examples:**
+  - `0.6` - More permissive matching
+  - `0.8` - Stricter matching
+  
+  <Tip>
+    Lower this value if prompt targets aren't being matched. Raise it if incorrect targets are being selected.
+  </Tip>
+</ParamField>
+
+<ParamField path="optimize_context_window" type="boolean">
+  Whether to optimize token usage by trimming context.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="use_agent_orchestrator" type="boolean">
+  Whether to enable agent orchestration mode.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="upstream_connect_timeout" type="string">
+  Connection timeout for upstream provider clusters.
+  
+  **Default:** `5s`
+  
+  **Format:** Duration string (e.g., `5s`, `10s`)
+  
+  **Examples:**
+  - `5s` - Default
+  - `10s` - Longer timeout for slow networks
+</ParamField>
+
+<ParamField path="upstream_tls_ca_path" type="string">
+  Path to trusted CA bundle for upstream TLS verification.
+  
+  **Default:** `/etc/ssl/certs/ca-certificates.crt`
+  
+  <Warning>
+    Only modify this if you need to use custom CA certificates for internal services.
+  </Warning>
+</ParamField>
+
+## Prompt Guards
+
+Configure built-in security guardrails for prompt validation:
+
+```yaml
+prompt_guards:
+  input_guards:
+    jailbreak:
+      on_exception:
+        message: "Your request contains content that violates our usage policy. Please rephrase and try again."
+```
+
+### Prompt Guard Parameters
+
+<ParamField path="input_guards.jailbreak" type="object">
+  Configuration for jailbreak detection.
+  
+  **Properties:**
+  - `on_exception` (object, required) - Response when jailbreak detected
+    - `message` (string, required) - Error message to return to user
+</ParamField>
+
+<Info>
+  Prompt guards run before requests reach agents or models, providing an early security layer.
+</Info>
+
+## Model Aliases
+
+Create friendly aliases for model identifiers (covered in detail in [Model Providers](/configuration/model-providers#model-aliases)):
+
+```yaml
+model_aliases:
+  fast-llm:
+    target: gpt-4o-mini
+  smart-llm:
+    target: gpt-4o
+  creative-llm:
+    target: claude-sonnet-4-20250514
+```
+
+## Prompt Targets
+
+Define intent-based routing targets (used with prompt listeners):
+
+```yaml
+prompt_targets:
+  - name: get_weather
+    description: Get weather information for a location
+    parameters:
+      - name: location
+        type: string
+        required: true
+        description: The city and state
+    endpoint:
+      name: weather_service
+      path: /weather
+      http_method: POST
+    system_prompt: |
+      Provide concise weather information.
+    auto_llm_dispatch_on_response: false
+```
+
+See the [Listeners documentation](/configuration/listeners#prompt-listener) for complete details.
+
+## Complete Advanced Example
+
+```yaml
+version: v0.3.0
+
+# Listeners
+listeners:
+  - type: agent
+    name: production_service
+    port: 8001
+    router: plano_orchestrator_v1
+    max_retries: 3
+    timeout: 30s
+    agents:
+      - id: main_agent
+        description: Production assistant with full capabilities
+        filter_chain:
+          - security_guard
+          - context_builder
+
+# Agents
+agents:
+  - id: main_agent
+    url: http://host.docker.internal:10505
+
+# Filters
+filters:
+  - id: security_guard
+    url: http://host.docker.internal:10500
+    type: mcp
+  - id: context_builder
+    url: http://host.docker.internal:10501
+    type: mcp
+
+# Model Providers
+model_providers:
+  - model: openai/gpt-4o
+    access_key: $OPENAI_API_KEY
+    default: true
+  - model: openai/gpt-4o-mini
+    access_key: $OPENAI_API_KEY
+  - model: anthropic/claude-sonnet-4-20250514
+    access_key: $ANTHROPIC_API_KEY
+
+# Model Aliases
+model_aliases:
+  prod-primary:
+    target: gpt-4o
+  prod-fallback:
+    target: claude-sonnet-4-20250514
+
+# Global System Prompt
+system_prompt: |
+  You are a professional assistant. Provide accurate, helpful responses.
+  Always maintain user privacy and data security.
+
+# State Storage (PostgreSQL)
+state_storage:
+  type: postgres
+  connection_string: $DATABASE_URL
+
+# Rate Limiting
+ratelimits:
+  # Premium tier
+  - model: openai/gpt-4o
+    selector:
+      key: user_tier
+      value: premium
+    limit:
+      tokens: 1000000
+      unit: day
+  
+  # Standard tier
+  - model: openai/gpt-4o-mini
+    selector:
+      key: user_tier
+      value: standard
+    limit:
+      tokens: 100000
+      unit: day
+
+# Prompt Guards
+prompt_guards:
+  input_guards:
+    jailbreak:
+      on_exception:
+        message: "Request blocked: potential policy violation detected."
+
+# Overrides
+overrides:
+  prompt_target_intent_matching_threshold: 0.6
+  optimize_context_window: true
+  upstream_connect_timeout: 10s
+
+# Tracing
+tracing:
+  random_sampling: 10  # 10% sampling for production
+  trace_arch_internal: false
+  span_attributes:
+    header_prefixes:
+      - x-user-
+      - x-tenant-
+      - x-trace-
+    static:
+      service.name: plano
+      service.version: 0.4.7
+      deployment.environment: production
+      deployment.region: us-west-2
+      team: platform
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use appropriate sampling rates">
+    Adjust tracing sampling based on environment:
+    
+    - **Development:** `random_sampling: 100` (trace everything)
+    - **Staging:** `random_sampling: 50` (trace half)
+    - **Production (low traffic):** `random_sampling: 100`
+    - **Production (high traffic):** `random_sampling: 1-10`
+  </Accordion>
+  
+  <Accordion title="Enable persistent state in production">
+    Always use PostgreSQL for state storage in production:
+    
+    ✅ **Production:**
+    ```yaml
+    state_storage:
+      type: postgres
+      connection_string: $DATABASE_URL
+    ```
+    
+    ❌ **Development only:**
+    ```yaml
+    state_storage:
+      type: memory
+    ```
+  </Accordion>
+  
+  <Accordion title="Implement rate limiting by tier">
+    Use rate limits to enforce usage tiers:
+    
+    ```yaml
+    ratelimits:
+      # Higher limits for paying customers
+      - model: openai/gpt-4o
+        selector:
+          key: user_tier
+          value: paid
+        limit:
+          tokens: 1000000
+          unit: month
+      
+      # Lower limits for free tier
+      - model: openai/gpt-4o-mini
+        selector:
+          key: user_tier
+          value: free
+        limit:
+          tokens: 10000
+          unit: month
+    ```
+  </Accordion>
+  
+  <Accordion title="Add static span attributes">
+    Include deployment metadata in all traces:
+    
+    ```yaml
+    tracing:
+      span_attributes:
+        static:
+          service.version: 0.4.7
+          deployment.environment: production
+          team: platform
+    ```
+  </Accordion>
+  
+  <Accordion title="Configure appropriate timeouts">
+    Set timeouts based on expected latency:
+    
+    ```yaml
+    overrides:
+      upstream_connect_timeout: 10s  # For slow networks
+    
+    listeners:
+      - type: agent
+        timeout: 60s  # For complex orchestration
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration Overview" icon="book" href="/configuration/overview">
+    Back to configuration overview
+  </Card>
+  <Card title="Listeners" icon="ear-listen" href="/configuration/listeners">
+    Configure listeners
+  </Card>
+</CardGroup>

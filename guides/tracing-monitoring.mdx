@@ -1,0 +1,686 @@
+---
+title: Tracing & Monitoring
+description: Set up OpenTelemetry tracing, capture agentic signals, and monitor LLM performance with Plano's observability stack
+---
+
+Plano provides zero-code observability through OpenTelemetry (OTEL) integration, automatically capturing distributed traces, metrics, and behavioral signals across your entire agentic stack.
+
+## Why Observability Matters
+
+Agentic applications are complex distributed systems where:
+
+- Requests flow through **multiple layers**: orchestration, agents, filters, LLMs
+- **Token costs** accumulate across many model calls
+- **Latency** impacts user experience (time-to-first-token, agent processing)
+- **Quality issues** are hard to detect without signals (frustration, looping, repetition)
+
+Plano's observability captures **all of this automatically** - no instrumentation code required.
+
+## OpenTelemetry Tracing
+
+Plano propagates trace context using the W3C Trace Context standard via the `traceparent` header.
+
+### Automatic Trace Capture
+
+Every request through Plano generates a complete trace:
+
+```
+Trace ID: 7f4e9a1c0d9d4a0bb9bf5a8a7d13f62a
+├─ plano(inbound)              [1.2s]
+│  ├─ plano(orchestrator)       [250ms]  ← Agent selection
+│  ├─ plano(agent:weather)      [800ms]  ← Weather agent execution
+│  │  ├─ plano(llm)              [150ms]  ← Location extraction (gpt-4o-mini)
+│  │  ├─ external(api)           [200ms]  ← Open-Meteo API call
+│  │  └─ plano(llm)              [450ms]  ← Response generation (gpt-5.2)
+│  └─ plano(handoff)            [150ms]  ← Return to user
+```
+
+### Understanding Span Types
+
+Plano creates structured spans for different operations:
+
+| Span Type | Description | Key Attributes |
+|-----------|-------------|----------------|
+| `plano(inbound)` | Initial request reception | `http.method`, `http.path`, `request.size` |
+| `plano(orchestrator)` | Agent selection via Plano-Orchestrator | `agent.selected`, `router.strategy` |
+| `plano(routing)` | LLM routing decision | `routing.strategy`, `endpoint.selected` |
+| `plano(filter)` | Filter chain execution | `filter.id`, `filter.type` |
+| `plano(agent)` | Agent processing | `agent.id`, `agent.url` |
+| `plano(llm)` | LLM API call | `llm.model`, `llm.provider`, `llm.usage.*` |
+| `plano(handoff)` | Upstream service call | `upstream.url`, `http.status_code` |
+
+### LLM Span Attributes
+
+Every LLM call captures detailed telemetry:
+
+```
+llm.model = "gpt-5.2"
+llm.provider = "openai"
+llm.usage.prompt_tokens = 150
+llm.usage.completion_tokens = 75
+llm.usage.total_tokens = 225
+llm.duration_ms = 1250
+llm.time_to_first_token = 320
+llm.temperature = 0.7
+llm.max_tokens = 1000
+llm.streaming = true
+```
+
+## CLI-Based Tracing
+
+Plano CLI includes a built-in OTLP listener for local development.
+
+<Steps>
+
+<Step title="Enable tracing in config">
+
+```yaml config.yaml
+version: v0.3.0
+
+# ... agents, model_providers, listeners ...
+
+tracing:
+  random_sampling: 100  # Trace 100% of requests
+  span_attributes:
+    header_prefixes:
+      - x-tenant-
+      - x-user-
+    static:
+      environment: development
+      service.version: "1.0.0"
+```
+</Step>
+
+<Step title="Start Plano with tracing">
+
+```bash
+# Auto-starts OTLP listener on port 4317
+planoai up --with-tracing config.yaml
+
+# Or use custom port
+planoai up --with-tracing --tracing-port 4318 config.yaml
+```
+</Step>
+
+<Step title="Send requests">
+
+```bash
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]
+  }'
+```
+</Step>
+
+<Step title="View traces">
+
+```bash
+# View most recent trace
+planoai trace
+
+# List all traces
+planoai trace --list
+
+# View specific trace by ID
+planoai trace 7f4e9a1c
+
+# Filter by attributes
+planoai trace --where llm.model=gpt-4o-mini --since 30m
+
+# JSON output for automation
+planoai trace --json
+```
+</Step>
+
+</Steps>
+
+### Trace Filtering and Queries
+
+Powerful CLI queries for debugging:
+
+```bash
+# Find slow requests
+planoai trace --where "duration_ms>2000" --limit 10
+
+# Find specific model usage
+planoai trace --where llm.model=gpt-5.2 --since 1h
+
+# Find errors
+planoai trace --where "http.status_code>=400"
+
+# Combine filters
+planoai trace --where llm.model=gpt-4o-mini --where agent.id=weather_agent
+
+# Compact attributes (default)
+planoai trace
+
+# Verbose with all attributes
+planoai trace --verbose
+```
+
+## Behavioral Signals
+
+Plano automatically enriches traces with **Agentic Signals** - behavioral indicators that detect quality issues.
+
+### What Are Signals?
+
+Signals are quality metrics computed from conversation patterns:
+
+- **Quality Assessment**: Overall interaction quality (Excellent/Good/Neutral/Poor/Severe)
+- **Efficiency Metrics**: Turn count, efficiency scores, repair frequency
+- **User Sentiment**: Frustration indicators, escalation requests
+- **Agent Behavior**: Repetition detection, looping patterns
+
+### Visual Flag Markers
+
+Problematic traces are automatically flagged with 🚩:
+
+```
+POST /v1/chat/completions gpt-4 🚩
+    ↑
+    Flag indicates concerning signals detected
+```
+
+### Signal Attributes in Spans
+
+Signals appear as span attributes:
+
+```
+signals.quality = "Severe"
+signals.turn_count = 15
+signals.efficiency_score = 0.234
+signals.frustration.severity = 3
+signals.frustration.indicators = ["repeated_queries", "negative_sentiment"]
+signals.escalation.requested = "true"
+signals.repetition.detected = "true"
+signals.repetition.patterns = ["asking_same_question"]
+```
+
+### Querying by Signals
+
+Find problematic interactions:
+
+```bash
+# Find severe quality issues
+planoai trace --where 'signals.quality=Severe'
+
+# Find frustrated users
+planoai trace --where 'signals.frustration.severity>=2'
+
+# Find inefficient flows
+planoai trace --where 'signals.efficiency_score<0.5'
+
+# Find escalations
+planoai trace --where 'signals.escalation.requested=true'
+```
+
+In external tools (Jaeger, Datadog, Grafana):
+
+```
+# Jaeger UI query
+span.tags:"signals.quality:Severe"
+
+# Grafana query
+trace.spans{signals.quality="Severe"}
+
+# Datadog query
+@signals.frustration.severity:>=2
+```
+
+<Note>
+Signals enable proactive quality monitoring - find issues before users complain.
+</Note>
+
+## Custom Span Attributes
+
+Add business context to traces via headers:
+
+```yaml config.yaml
+tracing:
+  random_sampling: 100
+  span_attributes:
+    header_prefixes:
+      - x-katanemo-
+      - x-tenant-
+    static:
+      environment: production
+      service.version: "1.0.0"
+      region: us-west-2
+```
+
+Send requests with custom headers:
+
+```bash
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "x-katanemo-workspace-id: ws_123" \
+  -H "x-katanemo-tenant-id: ten_456" \
+  -H "x-tenant-user-id: user_789" \
+  -d '{"messages": [...]}'
+```
+
+Resulting span attributes:
+
+```
+# From x-katanemo-* headers
+workspace.id = "ws_123"
+tenant.id = "ten_456"
+
+# From x-tenant-* headers
+user.id = "user_789"
+
+# Static attributes
+environment = "production"
+service.version = "1.0.0"
+region = "us-west-2"
+```
+
+Query by custom attributes:
+
+```bash
+planoai trace --where workspace.id=ws_123
+planoai trace --where tenant.id=ten_456 --where environment=production
+```
+
+<Tip>
+Use custom attributes for tenant-aware debugging, customer-specific traces, and multi-region analysis.
+</Tip>
+
+## Integrating with Observability Platforms
+
+### Jaeger
+
+Deploy Jaeger for trace visualization:
+
+```yaml docker-compose.yaml
+services:
+  plano:
+    image: katanemo/plano:latest
+    ports:
+      - "8001:8001"
+      - "12000:12000"
+    environment:
+      - OTEL_TRACING_GRPC_ENDPOINT=http://jaeger:4317
+    volumes:
+      - ./config.yaml:/app/plano_config.yaml
+  
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+```
+
+Access Jaeger UI at `http://localhost:16686`
+
+### Datadog
+
+Configure OpenTelemetry Collector to export to Datadog:
+
+```yaml otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 10s
+
+exporters:
+  datadog:
+    api:
+      key: ${DD_API_KEY}
+    site: ${DD_SITE}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [datadog]
+```
+
+```yaml docker-compose.yaml
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=datadoghq.com
+```
+
+### AWS X-Ray
+
+Export to X-Ray:
+
+```yaml otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+
+processors:
+  batch:
+
+exporters:
+  awsxray:
+    region: us-west-2
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awsxray]
+```
+
+### Langtrace
+
+Langtrace provides LLM-specific observability:
+
+```python app.py
+import os
+from langtrace_python_sdk import langtrace
+from openai import OpenAI
+
+# Initialize Langtrace
+langtrace.init(api_key=os.environ['LANGTRACE_API_KEY'])
+
+# Use Plano as base URL
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:12000/v1"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+Traces appear in Langtrace dashboard with full token usage, costs, and latency.
+
+## Prometheus Metrics
+
+Plano exposes metrics at `http://localhost:19901/stats?format=prometheus`
+
+### Key Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `llm_request_duration_ms` | Histogram | LLM request latency by model |
+| `llm_token_usage_total` | Counter | Token consumption by model/type |
+| `llm_request_total` | Counter | Request count by model/status |
+| `llm_time_to_first_token_ms` | Histogram | Streaming latency |
+| `agent_request_total` | Counter | Agent invocations |
+| `filter_execution_duration_ms` | Histogram | Filter chain latency |
+
+### Prometheus Configuration
+
+```yaml prometheus.yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: plano
+    scrape_interval: 15s
+    metrics_path: /stats
+    static_configs:
+      - targets: ['host.docker.internal:19901']
+    params:
+      format: ['prometheus']
+```
+
+### Grafana Dashboard
+
+Connect Prometheus as data source:
+
+```yaml grafana-datasource.yaml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    access: proxy
+    editable: true
+```
+
+Query examples:
+
+```promql
+# Average LLM latency by model
+rate(llm_request_duration_ms_sum[5m]) / rate(llm_request_duration_ms_count[5m])
+
+# Token usage rate
+rate(llm_token_usage_total[5m])
+
+# Request success rate
+sum(rate(llm_request_total{status="success"}[5m])) /
+sum(rate(llm_request_total[5m]))
+
+# P95 latency
+histogram_quantile(0.95, sum(rate(llm_request_duration_ms_bucket[5m])) by (le, model))
+```
+
+## Instrumenting Agents
+
+Add tracing to your agent code:
+
+```python weather_agent.py
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.propagate import extract, inject
+from fastapi import FastAPI, Request
+
+# Set up tracer
+resource = Resource(attributes={"service.name": "weather-agent"})
+tracer_provider = TracerProvider(resource=resource)
+otlp_exporter = OTLPSpanExporter(
+    endpoint="http://localhost:4317",
+    insecure=True
+)
+span_processor = BatchSpanProcessor(otlp_exporter)
+tracer_provider.add_span_processor(span_processor)
+trace.set_tracer_provider(tracer_provider)
+
+tracer = trace.get_tracer(__name__)
+
+app = FastAPI()
+
+@app.post("/v1/chat/completions")
+async def chat(request: Request):
+    # Extract trace context from Plano
+    context = extract(dict(request.headers))
+    
+    with tracer.start_as_current_span(
+        "weather_agent.chat",
+        context=context
+    ) as span:
+        body = await request.json()
+        messages = body.get("messages", [])
+        
+        # Add span attributes
+        span.set_attribute("agent.id", "weather_agent")
+        span.set_attribute("message.count", len(messages))
+        
+        # Create child spans for operations
+        with tracer.start_as_current_span("extract_location"):
+            location = await extract_location(messages)
+            span.set_attribute("location.extracted", location)
+        
+        with tracer.start_as_current_span("fetch_weather_data"):
+            weather_data = await get_weather_data(location)
+        
+        with tracer.start_as_current_span("generate_response"):
+            return StreamingResponse(
+                generate_response(messages, weather_data),
+                media_type="text/event-stream"
+            )
+```
+
+Now traces show the complete flow:
+
+```
+Trace ID: abc123...
+├─ plano(inbound)
+│  ├─ plano(orchestrator)
+│  ├─ plano(agent:weather_agent)
+│  │  ├─ weather_agent.chat              ← Your agent span
+│  │  │  ├─ extract_location            ← Child span
+│  │  │  ├─ fetch_weather_data          ← Child span
+│  │  │  └─ generate_response           ← Child span
+│  │  │     └─ plano(llm)               ← LLM call
+```
+
+## Complete Observability Stack
+
+Production-ready setup with all components:
+
+```yaml docker-compose.yaml
+services:
+  plano:
+    image: katanemo/plano:latest
+    ports:
+      - "8001:8001"
+      - "12000:12000"
+      - "19901:19901"
+    volumes:
+      - ./config.yaml:/app/plano_config.yaml
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OTEL_TRACING_GRPC_ENDPOINT=http://otel-collector:4317
+  
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+  
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+  
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+  
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - ./grafana-datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+
+volumes:
+  prometheus-data:
+  grafana-data:
+```
+
+Access:
+- Jaeger UI: `http://localhost:16686`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000`
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Sample appropriately">
+    Adjust sampling rate based on traffic:
+    
+    ```yaml
+    # Development: trace everything
+    tracing:
+      random_sampling: 100
+    
+    # Production: sample 10%
+    tracing:
+      random_sampling: 10
+    ```
+  </Accordion>
+  
+  <Accordion title="Use custom attributes for debugging">
+    Add business context:
+    
+    ```yaml
+    tracing:
+      span_attributes:
+        header_prefixes:
+          - x-tenant-
+          - x-user-
+          - x-session-
+    ```
+  </Accordion>
+  
+  <Accordion title="Monitor signals for quality">
+    Set up alerts for concerning signals:
+    
+    ```promql
+    # Alert on high frustration
+    sum(signals_frustration_severity > 2) > 10
+    
+    # Alert on poor quality
+    sum(signals_quality == "Severe") > 5
+    ```
+  </Accordion>
+  
+  <Accordion title="Query by span attributes">
+    Use attributes for targeted debugging:
+    
+    ```bash
+    # Find slow LLM calls
+    planoai trace --where "llm.duration_ms>2000"
+    
+    # Find high token usage
+    planoai trace --where "llm.usage.total_tokens>5000"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Example Traces
+
+Explore real-world tracing:
+
+<CardGroup cols={2}>
+  <Card title="Travel Agents" icon="plane" href="https://github.com/katanemo/plano/tree/main/demos/agent_orchestration/travel_agents">
+    Multi-agent system with full OTEL tracing
+  </Card>
+  
+  <Card title="LLM Gateway" icon="route" href="https://github.com/katanemo/plano/tree/main/demos/getting_started/llm_gateway">
+    Model routing with Jaeger integration
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Deployment" icon="rocket" href="/guides/setup-deployment">
+  Learn how to deploy Plano with observability in production
+</Card>
